@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>残業時間 可視化（Chart.js版：フルブリード2カラム）</title>
+
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+  :root{
+    --bg:#0b0f14; --card:#121821; --ink:#e9f0f5; --muted:#a9b5c1;
+    --accent:#7cc0ff; --accent2:#9dffa4; --warn:#ffd26f; --danger:#ff8b8b; --grid:#243141;
+  }
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Noto Sans JP";
+  }
+
+  /* 上段（設定/KPI）は中央寄せ */
+  .wrap{ max-width:1220px; margin:32px auto; padding:0 16px; }
+  h1{ font-size:20px; margin:0 0 16px; font-weight:700; letter-spacing:.2px }
+  .card{
+    background:var(--card); border:1px solid #1b2430; border-radius:16px;
+    padding:16px; margin-bottom:16px; box-shadow:0 4px 20px rgba(0,0,0,.2)
+  }
+  .toolbar{ display:grid; grid-template-columns:repeat(6,1fr); gap:12px }
+  label{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px }
+  input,select,button{
+    width:100%; background:#0e141c; border:1px solid #223149; color:var(--ink);
+    border-radius:10px; padding:10px 12px; font-size:14px; outline:none;
+  }
+  button{ cursor:pointer; background:#173351; border-color:#2a5f99; transition:.12s filter ease }
+  button:hover{ filter:brightness(1.06) }
+  .kpi{ display:flex; gap:16px; flex-wrap:wrap; margin-top:12px }
+  .chip{
+    background:#0f1724; border:1px solid #20304a; border-radius:999px;
+    padding:8px 12px; font-size:12px; color:var(--muted)
+  }
+  .small{ font-size:12px; color:var(--muted) }
+  .row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .row .full{ grid-column:1 / -1; }
+
+  /* ===== グラフセクションだけフルブリード（画面幅いっぱい） ===== */
+  .bleed{
+    width:100vw;               /* 画面幅 */
+    position:relative;
+    left:50%; right:50%;       /* 親の中央から */
+    margin-left:-50vw;         /* 画面の左端へ広げる */
+    margin-right:-50vw;        /* 画面の右端へ広げる */
+    padding:0 12px;            /* 端に少しだけ余白（必要なければ 0 に） */
+    box-sizing:border-box;
+    margin-top:16px;
+    margin-bottom:32px;
+  }
+
+  /* 2カラム（左右いっぱい） */
+  .twoCol{
+    position:relative;
+    display:grid;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    gap:16px 24px; /* rows, cols */
+  }
+  .twoCol::before{
+    content:"";
+    position:absolute; top:0; bottom:0; left:50%;
+    width:1px; transform:translateX(-0.5px);
+    background: linear-gradient(180deg, transparent 0%, var(--grid) 10%, var(--grid) 90%, transparent 100%);
+    pointer-events:none;
+  }
+  .col{ min-width:0; }
+
+  /* グラフ用は左右パディングを無くして“領域いっぱい”に */
+  .card--flush{ padding:12px 0 12px 0; }
+  .card--flush h2{ margin:0 12px 8px; font-size:16px; }
+  .card--flush .chartWrap{ border-radius:0; border-left:0; border-right:0; }
+
+  /* Chart.js 安定描画 */
+  .chartWrap{
+    position:relative; width:100%; height:360px;
+    background:#0c121a; border:1px solid #1b2430; border-radius:12px; overflow:hidden
+  }
+  .chartWrap canvas{ display:block; width:100% !important; height:100% !important }
+
+  /* 狭幅では1カラム（区切り線オフ、カード普通の余白でOK） */
+  @media (max-width: 980px){
+    .bleed{ padding:0 8px; }
+    .twoCol{ grid-template-columns:1fr; }
+    .twoCol::before{ display:none; }
+    .card--flush{ padding:16px; }
+    .card--flush h2{ margin:0 0 8px; }
+    .card--flush .chartWrap{ border-radius:12px; border-left:1px solid #1b2430; border-right:1px solid #1b2430; }
+  }
+</style>
+</head>
+<body>
+  <!-- 上段：センター寄せの設定/KPI -->
+  <div class="wrap">
+    <h1>残業時間の可視化（Chart.js）</h1>
+
+    <div class="card">
+      <div class="toolbar">
+        <div>
+          <label>ユーザー</label>
+          <select id="userSelect"></select>
+        </div>
+        <div>
+          <label>当月（表示用）</label>
+          <input id="monthPicker" type="month">
+        </div>
+        <div>
+          <label>所定労働時間（時/日）</label>
+          <input id="stdHours" type="number" step="0.25" value="8">
+        </div>
+        <div>
+          <label>休憩（分）</label>
+          <input id="breakMin" type="number" step="5" value="60">
+        </div>
+        <div>
+          <label>今年度開始月</label>
+          <select id="fyStart">
+            <option value="1">1月</option><option value="2">2月</option><option value="3">3月</option>
+            <option value="4" selected>4月</option>
+            <option value="5">5月</option><option value="6">6月</option><option value="7">7月</option>
+            <option value="8">8月</option><option value="9">9月</option><option value="10">10月</option>
+            <option value="11">11月</option><option value="12">12月</option>
+          </select>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button id="recalcBtn">再計算</button>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <div class="full">
+          <label style="display:flex; gap:8px; align-items:center">
+            <input id="lunchOverlapExtra" type="checkbox" checked>
+            <span class="small">
+              昼休憩(12:30–13:30)が外出に含まれる場合、<b>別途</b>休憩(指定分)を控除する
+              （例の <code>-5h</code> / <code>-1h</code> を再現）
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="kpi">
+        <div class="chip" id="kpi-month">当月残業 合計: - h</div>
+        <div class="chip" id="kpi-fy">今年度残業 合計: - h</div>
+        <div class="chip" id="kpi-lastDate">対象期間: -</div>
+      </div>
+
+      <div class="small" style="margin-top:6px">
+        ※昼休憩は固定 <b>12:30–13:30</b> として扱います（分数は上の「休憩（分）」）。外出と重なる場合の扱いは上のチェックで切替。
+      </div>
+    </div>
+  </div>
+
+  <!-- 下段：フルブリード2カラム（左右いっぱい） -->
+  <div class="bleed">
+    <div class="twoCol">
+      <!-- 左：当月 -->
+      <div class="col">
+        <div class="card card--flush">
+          <h2>当月の累積残業時間の推移（20h/40h：水平＆目標ペース）</h2>
+          <div class="chartWrap"><canvas id="chartMonth"></canvas></div>
+        </div>
+
+        <div class="card card--flush">
+          <h2>当月の平均残業時間の推移（h/日）</h2>
+          <div class="chartWrap"><canvas id="chartMonthAvg"></canvas></div>
+        </div>
+
+        <div class="card card--flush">
+          <h2>当月の各日の残業時間（棒グラフ）</h2>
+          <div class="chartWrap"><canvas id="chartMonthDaily"></canvas></div>
+        </div>
+      </div>
+
+      <!-- 右：今年度 -->
+      <div class="col">
+        <div class="card card--flush">
+          <h2>今年度の累積残業時間の推移（各月累積）</h2>
+          <div class="chartWrap"><canvas id="chartFY"></canvas></div>
+          <div class="small" id="fyLabel" style="margin:8px 12px 0"></div>
+        </div>
+
+        <div class="card card--flush">
+          <h2>今年度の各月の平均残業時間（h/日）</h2>
+          <div class="chartWrap"><canvas id="chartFYAvg"></canvas></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<!-- data.js を同階層に -->
+<script src="data.js"></script>
+
+<script>
+(function(){
+  /* ========= ユーティリティ ========= */
+  function parseDate(text){
+    if(!text || typeof text!=='string') return null;
+    const t=text.trim();
+    const m1=t.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})$/);
+    if(m1){ return new Date(+m1[1], +m1[2]-1, +m1[3], +m1[4], +m1[5], 0, 0); }
+    const m2=t.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+    if(m2){ return new Date(+m2[1], +m2[2]-1, +m2[3], 0, 0, 0, 0); }
+    return null;
+  }
+  function fmtYMD(dt){ const y=dt.getFullYear(), m=String(dt.getMonth()+1).padStart(2,'0'), d=String(dt.getDate()).padStart(2,'0'); return `${y}/${m}/${d}`; }
+  function daysInMonth(year, month){ return new Date(year, month, 0).getDate(); }
+  function to2(n){ const r=Math.round(n*100)/100; return Number(r.toFixed(2)); }
+
+  /* ========= データ ========= */
+  const rawData =
+    (typeof worktime_local!=='undefined' && Array.isArray(worktime_local)) ? worktime_local :
+    (typeof g_worktime    !=='undefined' && Array.isArray(g_worktime))     ? g_worktime     : [];
+  const getUserFromTitle = title => {
+    if(typeof title!=='string') return '';
+    const idx=title.indexOf(' (');
+    return (idx>0)? title.slice(0, idx) : title.trim();
+  };
+  const users = Array.from(new Set(rawData.map(r=>getUserFromTitle(r.title)).filter(Boolean))).sort();
+
+  /* ========= DOM ========= */
+  const els = {
+    userSelect: document.getElementById('userSelect'),
+    monthPicker: document.getElementById('monthPicker'),
+    stdHours: document.getElementById('stdHours'),
+    breakMin: document.getElementById('breakMin'),
+    fyStart: document.getElementById('fyStart'),
+    recalcBtn: document.getElementById('recalcBtn'),
+    lunchOverlapExtra: document.getElementById('lunchOverlapExtra'),
+
+    chartMonth: document.getElementById('chartMonth'),
+    chartMonthAvg: document.getElementById('chartMonthAvg'),
+    chartMonthDaily: document.getElementById('chartMonthDaily'),
+    chartFY: document.getElementById('chartFY'),
+    chartFYAvg: document.getElementById('chartFYAvg'),
+
+    kpiMonth: document.getElementById('kpi-month'),
+    kpiFY: document.getElementById('kpi-fy'),
+    kpiLastDate: document.getElementById('kpi-lastDate'),
+    fyLabel: document.getElementById('fyLabel')
+  };
+  function populateUsers(){
+    const sel=els.userSelect; sel.innerHTML='';
+    if(users.length===0){ const o=document.createElement('option'); o.value=''; o.textContent='(データなし)'; sel.appendChild(o); return; }
+    users.forEach(u=>{ const o=document.createElement('option'); o.value=u; o.textContent=u; sel.appendChild(o); });
+  }
+  populateUsers();
+
+  /* ========= 昼休憩ヘルパ ========= */
+  function lunchWindowOn(date){
+    const y=date.getFullYear(), m=date.getMonth(), d=date.getDate();
+    return { start:new Date(y,m,d,12,30,0,0), end:new Date(y,m,d,13,30,0,0) };
+  }
+  function overlapMinutes(aStart,aEnd,bStart,bEnd){
+    const s=Math.max(aStart.getTime(), bStart.getTime());
+    const e=Math.min(aEnd.getTime(),   bEnd.getTime());
+    return (e<=s)?0:(e-s)/60000;
+  }
+
+  /* ========= 残業計算（負許容） ========= */
+  function computeOvertimeMinutes(records, stdHoursPerDay=8, breakMin=60, lunchOverlapExtra=true){
+    const STD_MIN=Math.round(stdHoursPerDay*60);
+    const NO_OUT='1999/01/01 00:00';
+    const byDate=new Map();
+    for(const r of records){
+      const start=parseDate(r.start), end=parseDate(r.end);
+      if(!start||!end||end<=start) continue;
+
+      const baseMin=(end-start)/60000;
+      let outMin=0, outStart=null, outEnd=null;
+      const hasOut=r.start_out && r.end_out && r.start_out!==NO_OUT && r.end_out!==NO_OUT;
+      if(hasOut){
+        outStart=parseDate(r.start_out); outEnd=parseDate(r.end_out);
+        outMin=(outStart&&outEnd&&outEnd>outStart)? (outEnd-outStart)/60000 : 0;
+      }
+
+      let totalBreak=parseInt(breakMin)||0;
+      if(lunchOverlapExtra && hasOut && outStart && outEnd){
+        const {start:ls,end:le}=lunchWindowOn(start);
+        if(overlapMinutes(outStart,outEnd,ls,le)>0){ totalBreak += (parseInt(breakMin)||0); }
+      }
+
+      let effective=baseMin - outMin - totalBreak;
+      if(effective<0) effective=0;
+
+      const overtimeMin = effective - STD_MIN; // 負のままOK
+      const key=fmtYMD(start);
+      byDate.set(key, (byDate.get(key)||0) + overtimeMin);
+    }
+    return byDate;
+  }
+
+  /* ========= ビルダー ========= */
+  function buildMonthlyCumulative(byDate, y, m){
+    const last=daysInMonth(y,m), labels=[], data=[]; let cum=0;
+    for(let d=1; d<=last; d++){
+      const key=`${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`;
+      const h=(byDate.get(key)||0)/60; cum+=h;
+      labels.push(String(d)); data.push(to2(cum));
+    }
+    return {labels,data,last};
+  }
+  function buildMonthlyPace(last,targetH){ const step=targetH/last, ar=[]; for(let i=1;i<=last;i++){ ar.push(to2(step*i)); } return ar; }
+  function buildMonthlyRunningAvg(monthCum){ const labels=[...monthCum.labels]; const data=monthCum.data.map((cum,i)=>to2(cum/(i+1))); return {labels,data}; }
+  function buildMonthlyDailyHours(byDate,y,m){ const last=daysInMonth(y,m), labels=[], data=[]; for(let d=1; d<=last; d++){ const key=`${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`; labels.push(String(d)); data.push(to2((byDate.get(key)||0)/60)); } return {labels,data}; }
+  function buildFiscalYearCumulative(byDate, fyStartMonth, refDate){
+    const refY=refDate.getFullYear(), refM=refDate.getMonth()+1; let fyStartYear=(refM<fyStartMonth)?refY-1:refY;
+    const months=[]; for(let i=0;i<12;i++){ let m=fyStartMonth+i, y=fyStartYear; if(m>12){m-=12;y++;} months.push({y,m}); }
+    const labels=months.map(({y,m})=>`${y}/${String(m).padStart(2,'0')}`); const data=[]; let cum=0;
+    for(const {y,m} of months){ const last=daysInMonth(y,m); let min=0; for(let d=1; d<=last; d++){ const key=`${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`; min += (byDate.get(key)||0);} cum += min/60; data.push(to2(cum)); }
+    return {labels,data,months};
+  }
+  function buildFiscalYearMonthlyAvg(byDate, monthsList){
+    const labels=monthsList.map(({y,m})=>`${y}/${String(m).padStart(2,'0')}`);
+    const data=monthsList.map(({y,m})=>{
+      const last=daysInMonth(y,m); let min=0; for(let d=1; d<=last; d++){ const key=`${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`; min+=(byDate.get(key)||0); }
+      return to2((min/60)/last);
+    });
+    return {labels,data};
+  }
+  function buildFiscalYearPace360(len){ const step=360/len, ar=[]; for(let i=1;i<=len;i++){ ar.push(to2(step*i)); } return ar; }
+
+  /* ========= 補助 ========= */
+  function filterByUser(all, name){ return all.filter(r=>getUserFromTitle(r.title)===name); }
+  function latestStartDate(records){ let max=null; for(const r of records){ const d=parseDate(r.start); if(d && (!max||d>max)) max=d; } return max; }
+
+  /* ========= Chart.js（負対応） ========= */
+  let chartMonth, chartMonthAvg, chartMonthDaily, chartFY, chartFYAvg;
+  function computeYMinMax(arr, fallbackMax=1){ const minV=Math.min(...arr,0), maxV=Math.max(...arr,0,fallbackMax); const step=(maxV-minV)||1, pad=Math.max(step*0.05,0.5); return { suggestedMin: Math.floor((minV-pad)*2)/2, suggestedMax: Math.ceil((maxV+pad)*2)/2 }; }
+
+  function renderCharts(p){
+    const { monthLabels, monthCum, monthPace20, monthPace40, monthAvg, monthDaily,
+            fyLabels, fyCum, fyAvgLabels, fyAvgData, fyPace360 } = p;
+
+    // 当月 累積
+    const mScale=computeYMinMax([ ...monthCum, ...monthPace20, ...monthPace40, 0, 20, 40 ], 40);
+    if(chartMonth) chartMonth.destroy();
+    chartMonth=new Chart(els.chartMonth.getContext('2d'), {
+      type:'line',
+      data:{ labels:monthLabels, datasets:[
+        {label:'当月 累積', data:monthCum, borderWidth:2, borderColor:'#7cc0ff', backgroundColor:'#7cc0ff', tension:0.2, pointRadius:2},
+        {label:'20h ガイド（水平）', data:Array.from({length:monthLabels.length},()=>20), borderWidth:1.5, borderColor:'#ffd26f', borderDash:[6,6], pointRadius:0},
+        {label:'40h ガイド（水平）', data:Array.from({length:monthLabels.length},()=>40), borderWidth:1.5, borderColor:'#ff8b8b', borderDash:[6,6], pointRadius:0},
+        {label:'20h 目標ペース（月末到達）', data:monthPace20, borderWidth:1.5, borderColor:'#ffd26f', borderDash:[2,4], pointRadius:0},
+        {label:'40h 目標ペース（月末到達）', data:monthPace40, borderWidth:1.5, borderColor:'#ff8b8b', borderDash:[2,4], pointRadius:0},
+      ]},
+      options:{ responsive:true, maintainAspectRatio:false, resizeDelay:150,
+        scales:{ y:{ beginAtZero:false, suggestedMin:mScale.suggestedMin, suggestedMax:mScale.suggestedMax, ticks:{color:'#a9b5c1', callback:v=>v+'h'}, grid:{color:'#243141'}},
+                 x:{ ticks:{color:'#a9b5c1'}, grid:{color:'#1a2330'}}},
+        plugins:{ legend:{labels:{color:'#a9b5c1'}}, tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y} h`}} }
+      }
+    });
+
+    // 当月 平均
+    const mAvgScale=computeYMinMax(monthAvg,1);
+    if(chartMonthAvg) chartMonthAvg.destroy();
+    chartMonthAvg=new Chart(els.chartMonthAvg.getContext('2d'), {
+      type:'line',
+      data:{ labels:monthLabels, datasets:[{label:'当月 平均（h/日）', data:monthAvg, borderWidth:2, borderColor:'#7cc0ff', backgroundColor:'#7cc0ff', tension:0.2, pointRadius:2}]},
+      options:{ responsive:true, maintainAspectRatio:false, resizeDelay:150,
+        scales:{ y:{ beginAtZero:false, suggestedMin:mAvgScale.suggestedMin, suggestedMax:mAvgScale.suggestedMax, ticks:{color:'#a9b5c1', callback:v=>v+' h/日'}, grid:{color:'#243141'}},
+                 x:{ ticks:{color:'#a9b5c1'}, grid:{color:'#1a2330'}}},
+        plugins:{ legend:{labels:{color:'#a9b5c1'}}, tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y} h/日`}} }
+      }
+    });
+
+    // 当月 日別（棒）
+    const mDailyScale=computeYMinMax(monthDaily,1);
+    if(chartMonthDaily) chartMonthDaily.destroy();
+    chartMonthDaily=new Chart(els.chartMonthDaily.getContext('2d'), {
+      type:'bar',
+      data:{ labels:monthLabels, datasets:[{label:'当月 各日の残業（h）', data:monthDaily, borderWidth:0, backgroundColor:'#7cc0ff'}]},
+      options:{ responsive:true, maintainAspectRatio:false, resizeDelay:150,
+        scales:{ y:{ beginAtZero:false, suggestedMin:mDailyScale.suggestedMin, suggestedMax:mDailyScale.suggestedMax, ticks:{color:'#a9b5c1', callback:v=>v+'h'}, grid:{color:'#243141'}},
+                 x:{ ticks:{color:'#a9b5c1'}, grid:{color:'#1a2330'}}},
+        plugins:{ legend:{labels:{color:'#a9b5c1'}}, tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y} h`}} }
+      }
+    });
+
+    // 今年度 累積（+360h）
+    const fyScale=computeYMinMax([ ...fyCum, ...fyPace360, 0, 360 ], 360);
+    if(chartFY) chartFY.destroy();
+    chartFY=new Chart(els.chartFY.getContext('2d'), {
+      type:'line',
+      data:{ labels:fyLabels, datasets:[
+        {label:'今年度 累積', data:fyCum, borderWidth:2, borderColor:'#9dffa4', backgroundColor:'#9dffa4', tension:0.2, pointRadius:2},
+        {label:'360h ガイド（水平）', data:Array.from({length:fyLabels.length},()=>360), borderWidth:1.5, borderColor:'#ff8b8b', borderDash:[6,6], pointRadius:0},
+        {label:'360h 目標ペース（年度末到達）', data:fyPace360, borderWidth:1.5, borderColor:'#ffd26f', borderDash:[2,4], pointRadius:0},
+      ]},
+      options:{ responsive:true, maintainAspectRatio:false, resizeDelay:150,
+        scales:{ y:{ beginAtZero:false, suggestedMin:fyScale.suggestedMin, suggestedMax:fyScale.suggestedMax, ticks:{color:'#a9b5c1', callback:v=>v+'h'}, grid:{color:'#243141'}},
+                 x:{ ticks:{color:'#a9b5c1'}, grid:{color:'#1a2330'}}},
+        plugins:{ legend:{labels:{color:'#a9b5c1'}}, tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y} h`}} }
+      }
+    });
+
+    // 今年度 平均
+    const fyAvgScale=computeYMinMax(fyAvgData,1);
+    if(chartFYAvg) chartFYAvg.destroy();
+    chartFYAvg=new Chart(els.chartFYAvg.getContext('2d'), {
+      type:'line',
+      data:{ labels:fyAvgLabels, datasets:[{label:'各月の平均（h/日）', data:fyAvgData, borderWidth:2, borderColor:'#9dffa4', backgroundColor:'#9dffa4', tension:0.2, pointRadius:2}]},
+      options:{ responsive:true, maintainAspectRatio:false, resizeDelay:150,
+        scales:{ y:{ beginAtZero:false, suggestedMin:fyAvgScale.suggestedMin, suggestedMax:fyAvgScale.suggestedMax, ticks:{color:'#a9b5c1', callback:v=>v+' h/日'}, grid:{color:'#243141'}},
+                 x:{ ticks:{color:'#a9b5c1'}, grid:{color:'#1a2330'}}},
+        plugins:{ legend:{labels:{color:'#a9b5c1'}}, tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y} h/日`}} }
+      }
+    });
+  }
+
+  /* ========= 再計算 ========= */
+  function filterByUser(all, name){ return all.filter(r=>getUserFromTitle(r.title)===name); }
+  function latestStartDate(records){ let max=null; for(const r of records){ const d=parseDate(r.start); if(d && (!max||d>max)) max=d; } return max; }
+
+  function recalc(){
+    const stdHours=parseFloat(els.stdHours.value)||8;
+    const breakMin=parseInt(els.breakMin.value)||60;
+    const fyStart=parseInt(els.fyStart.value)||4;
+    const user=els.userSelect.value;
+    const lunchExtra=!!els.lunchOverlapExtra.checked;
+
+    const userRecords=filterByUser(rawData, user);
+    const byDate=computeOvertimeMinutes(userRecords, stdHours, breakMin, lunchExtra);
+
+    let y,m; const mv=els.monthPicker.value;
+    if(mv){ const [yy,mm]=mv.split('-').map(n=>parseInt(n)); y=yy; m=mm; }
+    else { const base=latestStartDate(userRecords)||new Date(); y=base.getFullYear(); m=base.getMonth()+1; els.monthPicker.value=`${y}-${String(m).padStart(2,'0')}`; }
+
+    const monthCumObj=buildMonthlyCumulative(byDate,y,m);
+    const monthPace20=buildMonthlyPace(monthCumObj.last,20);
+    const monthPace40=buildMonthlyPace(monthCumObj.last,40);
+    const monthAvgObj=buildMonthlyRunningAvg(monthCumObj);
+    const monthDaily=buildMonthlyDailyHours(byDate,y,m);
+
+    const refDate=latestStartDate(userRecords)||new Date();
+    const fyCumObj=buildFiscalYearCumulative(byDate,fyStart,refDate);
+    const fyAvgObj=buildFiscalYearMonthlyAvg(byDate,fyCumObj.months);
+    const fyPace360=buildFiscalYearPace360(fyCumObj.labels.length);
+
+    const monthTotal=monthCumObj.data.at(-1)||0;
+    const fyTotal=fyCumObj.data.at(-1)||0;
+    els.kpiMonth.textContent=`当月残業 合計: ${monthTotal.toFixed(2)} h`;
+    els.kpiFY.textContent=`今年度残業 合計: ${fyTotal.toFixed(2)} h`;
+    let lastDate=null; for(const k of byDate.keys()){ const d=parseDate(k); if(d && (!lastDate||d>lastDate)) lastDate=d; }
+    els.kpiLastDate.textContent=`対象期間: ${lastDate ? fmtYMD(lastDate) : '-'}`;
+    els.fyLabel.textContent=`FY ${fyCumObj.labels[0]} ～ ${fyCumObj.labels[fyCumObj.labels.length-1]}`;
+
+    renderCharts({
+      monthLabels: monthCumObj.labels,
+      monthCum: monthCumObj.data,
+      monthPace20, monthPace40,
+      monthAvg: monthAvgObj.data,
+      monthDaily: monthDaily.data,
+      fyLabels: fyCumObj.labels,
+      fyCum: fyCumObj.data,
+      fyAvgLabels: fyAvgObj.labels,
+      fyAvgData: fyAvgObj.data,
+      fyPace360
+    });
+  }
+
+  /* ========= 初期化 ========= */
+  if(users.length>0){ els.userSelect.value=users[0]; }
+  ['change','input'].forEach(ev=>{
+    els.userSelect.addEventListener(ev,recalc);
+    els.monthPicker.addEventListener(ev,recalc);
+    els.stdHours.addEventListener(ev,recalc);
+    els.breakMin.addEventListener(ev,recalc);
+    els.fyStart.addEventListener(ev,recalc);
+    els.lunchOverlapExtra.addEventListener(ev,recalc);
+  });
+  els.recalcBtn.addEventListener('click', recalc);
+  recalc();
+})();
+</script>
+</body>
+</html>

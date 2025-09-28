@@ -1,0 +1,335 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>業務ログ：作業時間×詳細（カテゴリ付／集計テーブル＋CSV出力）</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --muted: #9aa4b2;
+    --fg: #e7ecf3;
+    --acc: #5aa9ff;
+    --line: #2a2f3a;
+  }
+  html, body { height: 100%; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--fg);
+    font: 14px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+  }
+  h1 { margin: 0 0 12px; font-size: 18px; }
+  .wrap { display: grid; gap: 16px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px;
+  }
+  .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; }
+  textarea {
+    width: 100%; min-height: 200px; resize: vertical;
+    background: #0b0d12; color: var(--fg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    line-height: 1.5;
+  }
+  .hint { color: var(--muted); font-size: 12px; }
+  .btns { display: flex; gap: 8px; }
+  button {
+    appearance: none; border: 1px solid var(--line); background: #0b0d12; color: var(--fg);
+    padding: 8px 12px; border-radius: 10px; cursor: pointer;
+  }
+  button.primary { background: var(--acc); color: #08121f; border-color: transparent; font-weight: 600; }
+  button:hover { filter: brightness(1.05); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  table {
+    width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 12px;
+    border: 1px solid var(--line);
+  }
+  thead th {
+    text-align: left; background: #0b0d12; color: var(--muted); font-weight: 600; letter-spacing: .02em;
+    padding: 10px 12px; border-bottom: 1px solid var(--line);
+  }
+  tbody td {
+    padding: 10px 12px; border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  .time, .dt { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .time { font-weight: 600; }
+  .empty {
+    color: var(--muted); text-align: center; padding: 24px; border: 1px dashed var(--line);
+    border-radius: 10px; background: #0b0d12;
+  }
+  .footer { color: var(--muted); font-size: 12px; }
+
+  /* 出力エリアを左右 1:1 に分割 */
+  .out-split {
+    display: grid; gap: 16px;
+    grid-template-columns: 1fr 1fr;
+  }
+  .subpanel {
+    background: #0b0d12; border: 1px solid var(--line); border-radius: 12px; padding: 12px;
+  }
+  .subhdr {
+    display: flex; align-items: center; gap: 8px; margin: 0 0 8px;
+  }
+  .subhdr h2 {
+    margin: 0; font-size: 14px; color: var(--muted); font-weight: 700; letter-spacing: .02em;
+  }
+
+  /* 集計テーブルの数値を右寄せ */
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+
+<body>
+  <h1>業務ログ：2列テーブル（左：作業時間／詳細／作業日時、右：詳細毎の合計時間）</h1>
+  <div class="wrap">
+    <div class="panel">
+      <div class="row" style="margin-bottom:8px">
+        <label class="hint">タブ区切り（TSV）を貼り付けてください（1行=原データ1件）</label>
+        <div class="btns">
+          <button id="btnClear">クリア</button>
+          <button id="btnRender" class="primary">テーブルに変換</button>
+        </div>
+      </div>
+      <textarea id="inp" placeholder="日時	時間(開始〜)	時間(〜終了)	カテゴリ	詳細1	詳細2&#10;2025/9/17 11:10	00:20		業務分析	業務分析	"></textarea>
+      <div class="hint">
+        ※ ヘッダ行は自動で無視します。<br>
+        ※ 終了側で「詳細2」を採用する場合は「詳細2_」を先頭に付与。<br>
+        ※ 「詳細2」が空で両方の時間が入っている場合は、両方とも「詳細1」を採用（同一タスク扱い）。<br>
+        ※ 左の「詳細」は <code>[カテゴリ]_[詳細]</code> 形式。右端「作業日時」は参照元行の「日時」です。
+      </div>
+    </div>
+
+    <div class="panel">
+      <!-- 出力エリア：左右 1:1 -->
+      <div class="out-split">
+        <div class="subpanel">
+          <div class="subhdr">
+            <button id="btnCsvLeft" disabled>CSV出力</button>
+            <h2>左：現在の出力データ</h2>
+          </div>
+          <div id="out-left" class="empty">ここに「作業時間」「詳細」「作業日時」の3列テーブルが表示されます。</div>
+        </div>
+        <div class="subpanel">
+          <div class="subhdr">
+            <button id="btnCsvRight" disabled>CSV出力</button>
+            <h2>右：詳細ごとの合計時間（分）</h2>
+          </div>
+          <div id="out-right" class="empty">ここに「詳細」ごとの合計時間テーブルが表示されます。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      左側の出力仕様は従来のままです。右側は同じデータを元に「詳細」単位の合計（分）を表示します。
+    </div>
+  </div>
+
+  <script>
+    const $ = (s, el=document) => el.querySelector(s);
+
+    const headerTokens = ["日時","時間(開始〜)","時間(〜終了)","カテゴリ","詳細1","詳細2"];
+
+    function looksLikeHeader(line){
+      return headerTokens.every(tok => line.includes(tok));
+    }
+
+    function escapeHTML(s){
+      return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function normalizeCell(x){
+      return (x ?? "").trim();
+    }
+
+    // "H:MM" or "HH:MM" -> minutes
+    function toMinutes(hhmm){
+      const s = (hhmm || "").trim();
+      if (!s) return 0;
+      const m = s.match(/^(\d{1,2}):([0-5]\d)$/);
+      if (!m) return 0;
+      return parseInt(m[1],10) * 60 + parseInt(m[2],10);
+    }
+
+    // 詳細文字列の生成: [カテゴリ]_[詳細]（詳細2使用時は先頭に「詳細2_」）
+    function buildDetail(cat, detail, useDetail2Prefix=false){
+      const core = `[${cat}]_${detail}`;
+      return (useDetail2Prefix ? `詳細2_` : ``) + core;
+    }
+
+    // TSVをパースして {time, detail, dt} の配列に展開（左の表用データ）
+    function parseTSV(tsv){
+      const lines = tsv.split(/\r?\n/).map(l => l.replace(/\s+$/,'')).filter(l => l.length);
+      if (!lines.length) return [];
+
+      let startIdx = 0;
+      if (looksLikeHeader(lines[0])) startIdx = 1;
+
+      const rows = [];
+      for (let i = startIdx; i < lines.length; i++){
+        const raw = lines[i];
+        const cells = raw.split("\t"); // keep empties
+
+        const dt     = normalizeCell(cells[0]); // 日時
+        const tStart = normalizeCell(cells[1]); // 時間(開始〜)
+        const tEnd   = normalizeCell(cells[2]); // 時間(〜終了)
+        const cat    = normalizeCell(cells[3]); // カテゴリ
+        const d1     = normalizeCell(cells[4]); // 詳細1
+        const d2     = normalizeCell(cells[5]); // 詳細2
+
+        if (tStart){
+          const detailText = buildDetail(cat, d1, false);
+          rows.push({ time: tStart, detail: detailText, dt });
+        }
+        if (tEnd){
+          if (d2){
+            const detailText = buildDetail(cat, d2, true);
+            rows.push({ time: tEnd, detail: detailText, dt });
+          } else {
+            const detailText = buildDetail(cat, d1, false);
+            rows.push({ time: tEnd, detail: detailText, dt });
+          }
+        }
+      }
+      return rows;
+    }
+
+    // 集計（右の表用データ）: {detail => totalMinutes}
+    function aggregateByDetail(pairs){
+      const map = new Map();
+      for (const p of pairs){
+        const min = toMinutes(p.time);
+        const key = p.detail || "";
+        if (!key) continue;
+        map.set(key, (map.get(key) || 0) + min);
+      }
+      // 配列化して合計分の降順でソート
+      return Array.from(map.entries())
+        .map(([detail, totalMin]) => ({ detail, totalMin }))
+        .sort((a,b) => b.totalMin - a.totalMin);
+    }
+
+    function renderLeftTable(pairs){
+      const el = $("#out-left");
+      if (!pairs.length){
+        el.className = "empty";
+        el.innerHTML = "有効なデータがありません。TSVを貼り付けて「テーブルに変換」を押してください。";
+        $("#btnCsvLeft").disabled = true;
+        return;
+      }
+      const header = `
+        <thead><tr>
+          <th style="width:120px">作業時間</th>
+          <th>詳細</th>
+          <th style="width:170px">作業日時</th>
+        </tr></thead>`;
+      const body = pairs.map(p => {
+        const time = escapeHTML(p.time);
+        const detail = escapeHTML(p.detail || "");
+        const dt = escapeHTML(p.dt || "");
+        return `<tr>
+          <td class="time">${time}</td>
+          <td>${detail || "<span style='color:var(--muted)'>（詳細なし）</span>"}</td>
+          <td class="dt">${dt || "<span style='color:var(--muted)'>（未設定）</span>"}</td>
+        </tr>`;
+      }).join("");
+      el.className = "";
+      el.innerHTML = `<table>${header}<tbody>${body}</tbody></table>`;
+      $("#btnCsvLeft").disabled = false;
+    }
+
+    function renderRightAggTable(agg){
+      const el = $("#out-right");
+      if (!agg.length){
+        el.className = "empty";
+        el.innerHTML = "集計対象がありません。";
+        $("#btnCsvRight").disabled = true;
+        return;
+      }
+      const header = `
+        <thead><tr>
+          <th>詳細</th>
+          <th style="width:120px" class="num">合計(分)</th>
+        </tr></thead>`;
+      const body = agg.map(r => {
+        const detail = escapeHTML(r.detail);
+        return `<tr>
+          <td>${detail}</td>
+          <td class="num">${r.totalMin}</td>
+        </tr>`;
+      }).join("");
+      el.className = "";
+      el.innerHTML = `<table>${header}<tbody>${body}</tbody></table>`;
+      $("#btnCsvRight").disabled = false;
+    }
+
+    // ===== CSV出力 =====
+    function toCSV(rows){
+      // rows: array of arrays (each is fields for a row)
+      const esc = (v) => {
+        const s = (v ?? "").toString();
+        // always quote, double-up quotes
+        return `"${s.replace(/"/g, '""')}"`;
+      };
+      return rows.map(r => r.map(esc).join(",")).join("\r\n");
+    }
+
+    function downloadCSV(filename, headerRow, dataRows){
+      const bom = "\uFEFF"; // Excel向けBOM
+      const csv = toCSV([headerRow, ...dataRows]);
+      const blob = new Blob([bom + csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    // 最新のデータを保持（CSV出力用）
+    let lastPairs = [];
+    let lastAgg = [];
+
+    function handleRender(){
+      const tsv = $("#inp").value;
+      lastPairs = parseTSV(tsv);
+      renderLeftTable(lastPairs);                 // 左：従来の出力（仕様を変えない）
+      lastAgg = aggregateByDetail(lastPairs);     // 右：詳細ごとの合計(分)
+      renderRightAggTable(lastAgg);
+    }
+
+    // UI wiring
+    $("#btnRender").addEventListener("click", handleRender);
+    $("#btnClear").addEventListener("click", () => {
+      $("#inp").value = "";
+      lastPairs = [];
+      lastAgg = [];
+      $("#out-left").className="empty";
+      $("#out-left").innerHTML="ここに「作業時間」「詳細」「作業日時」の3列テーブルが表示されます。";
+      $("#out-right").className="empty";
+      $("#out-right").innerHTML="ここに「詳細」ごとの合計時間テーブルが表示されます。";
+      $("#btnCsvLeft").disabled = true;
+      $("#btnCsvRight").disabled = true;
+    });
+    // テキストエリアからフォーカスが外れたら自動レンダー
+    $("#inp").addEventListener("blur", handleRender);
+
+    // CSV出力ボタン
+    $("#btnCsvLeft").addEventListener("click", () => {
+      if (!lastPairs.length) return;
+      const header = ["作業時間","詳細","作業日時"];
+      const rows = lastPairs.map(p => [p.time, p.detail, p.dt]);
+      const ts = new Date().toISOString().replace(/[:.]/g,"-");
+      downloadCSV(`worklog_detail_${ts}.csv`, header, rows);
+    });
+
+    $("#btnCsvRight").addEventListener("click", () => {
+      if (!lastAgg.length) return;
+      const header = ["詳細","合計(分)"];
+      const rows = lastAgg.map(r => [r.detail, r.totalMin]);
+      const ts = new Date().toISOString().replace(/[:.]/g,"-");
+      downloadCSV(`worklog_summary_${ts}.csv`, header, rows);
+    });
+  </script>
+</body>

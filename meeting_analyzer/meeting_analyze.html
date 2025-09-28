@@ -1,0 +1,66 @@
+<html>
+
+<head>
+    <title>Meeting Analyze(Beta)</title>
+
+    <!-- chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- mindmap.js -->
+    <script src="common.js" type="text/javascript" defer></script>
+    <script src="chartjs_wrapper.js" type="text/javascript" defer></script>
+
+    <script src="meeting_analyze_common.js" type="text/javascript" defer></script>
+    <script src="timeline_comments.js" type="text/javascript" defer></script>
+    <script src="worktime.js" type="text/javascript" defer></script>
+    <script src="worktime2.js" type="text/javascript" defer></script>
+    <script src="meeting_analyze.js" type="text/javascript" defer></script>
+
+    <style type="text/css">
+        body { font-size: 70%; }
+
+        .flex-box {display: flex;}
+
+        /* 文字小さめ */
+        .font_small { font-size: 70%; }
+
+        /* Button */
+        button.button-large { width: 120; height: 50; font-size: 150%; }
+        button.button-mid { width: 100; height: 50; font-size: 100%; }
+
+        /* table */
+        table {
+          font-size: 100%;
+          border-collapse: collapse;
+          border: 2px solid rgb(140 140 140);
+        }
+        th,td {
+          border: 1px solid rgb(160 160 160);
+          padding: 8px 10px;
+        }
+    </style>
+
+    <!-- 環境ごとのCSS(上のCSSを上書き) -->
+    <!-- <link rel="stylesheet" type="text/css" href="task_manager_env.css"> -->
+
+</head>
+
+
+
+
+<body>
+
+  <!-- Canvas -->
+  <canvas id="chart_canvas"></canvas>
+
+  <!-- Canvas -->
+  <canvas id="chart_canvas_worktime"></canvas>
+  <canvas id="chart_canvas_worktime_accum"></canvas>
+  <canvas id="chart_canvas_worktime_accum2"></canvas>
+
+  <!-- table -->
+  <div id="canvas_table"></div>
+
+</body>
+
+</html>
