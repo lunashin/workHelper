@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>簡易作図ツール (Fabric.js) – 修正版</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/fabric@5.3.0/dist/fabric.min.js"></script>
+  <style>
+    :root{ --bg:#0f1216; --panel:#171b21; --bd:#2a2f36; --txt:#e8eef6; --sub:#9aa4b2;
+           --btn:#222833; --btn-h:#2a3240; --acc:#5da8ff; }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;}
+    .wrap{display:grid;grid-template-rows:auto 1fr;height:100%;}
+    .toolbar{display:flex;gap:.5rem;align-items:center;padding:.5rem .75rem;background:var(--panel);border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;}
+    .grp{display:flex;gap:.25rem;padding:.25rem;border:1px solid var(--bd);border-radius:12px;background:#141821;}
+    button,select,input[type="color"]{background:var(--btn);color:var(--txt);border:1px solid var(--bd);border-radius:10px;padding:.45rem .7rem;cursor:pointer;}
+    button:hover{background:var(--btn-h)}
+    button[aria-pressed="true"]{outline:2px solid var(--acc);background:var(--btn-h)}
+    #stage{position:relative;height:100%;overflow:hidden;}
+    #c{background:#0b0e12;display:block;margin:auto;border-left:1px solid var(--bd);border-right:1px solid var(--bd);}
+    .hint{margin-left:auto;color:var(--sub);font-size:.9rem}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="toolbar">
+    <div class="grp">
+      <button id="toolSelect" aria-pressed="true" title="選択(V)">選択</button>
+      <button id="toolRect"  title="長方形(R)">長方形</button>
+      <button id="toolEllipse" title="楕円(E)">楕円</button>
+      <button id="toolText"  title="テキスト(T)">テキスト</button>
+      <button id="toolArrow" title="矢印(A)">矢印</button>
+      <label style="display:flex;align-items:center;gap:.4rem;padding:0 .4rem">線幅
+        <select id="strokeWidth"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>6</option></select>
+      </label>
+      <input id="strokeColor" type="color" value="#e8eef6" title="線色" />
+      <input id="fillColor"   type="color" value="#3b82f6" title="塗り色" />
+    </div>
+    <div class="grp">
+      <button id="btnUndo" title="Undo (Ctrl+Z)">Undo</button>
+      <button id="btnRedo" title="Redo (Ctrl+Y)">Redo</button>
+      <button id="btnDel"  title="Delete">削除</button>
+      <button id="btnClearAll" title="全ての図形を削除">全削除</button>
+    </div>
+    <div class="grp">
+      <button id="btnFit" title="全体表示">全体表示</button>
+      <button id="btnPNG" title="PNGとして保存">PNG</button>
+      <button id="btnSVG" title="SVGとして保存">SVG</button>
+    </div>
+    <span class="hint">S/C/A: 追加（カーソル）・D: 選択削除 / Space+ドラッグ: パン / ホイール: ズーム / ダブルクリック: ノードにテキスト追加/編集</span>
+  </div>
+  <div id="stage"><canvas id="c" width="1400" height="900"></canvas></div>
+</div>
+
+<script>
+window.addEventListener('DOMContentLoaded', () => {
+  const $ = id => document.getElementById(id);
+
+  // ===== Fabric Canvas =====
+  const canvas = new fabric.Canvas('c', {
+    backgroundColor:'#0b0e12',
+    selection:true,
+    preserveObjectStacking:true,
+    subTargetCheck:true
+  });
+
+  // ===== Grid =====
+  const gridMinor=20, gridMajor=100, SNAP_GRID=10, SNAP_PIX=15;
+  function drawGrid(){
+    const w=canvas.getWidth(), h=canvas.getHeight();
+    const bg=new fabric.StaticCanvas(null,{width:w,height:h});
+    const ctx=bg.getContext('2d');
+    ctx.clearRect(0,0,w,h);
+    ctx.lineWidth=1; ctx.strokeStyle='rgba(255,255,255,0.05)';
+    for(let x=0;x<=w;x+=gridMinor){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+    for(let y=0;y<=h;y+=gridMinor){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+    ctx.strokeStyle='rgba(93,168,255,0.22)';
+    for(let x=0;x<=w;x+=gridMajor){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+    for(let y=0;y<=h;y+=gridMajor){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+    canvas.setBackgroundImage(bg.toDataURL(), canvas.requestRenderAll.bind(canvas));
+  }
+  drawGrid();
+
+  // ===== UI refs =====
+  const ui = {
+    toolSelect: $('toolSelect'), toolRect:$('toolRect'), toolEllipse:$('toolEllipse'),
+    toolText:$('toolText'), toolArrow:$('toolArrow'),
+    strokeWidth:$('strokeWidth'), strokeColor:$('strokeColor'), fillColor:$('fillColor'),
+    btnUndo:$('btnUndo'), btnRedo:$('btnRedo'), btnDel:$('btnDel'), btnClearAll:$('btnClearAll'),
+    btnFit:$('btnFit'), btnPNG:$('btnPNG'), btnSVG:$('btnSVG'),
+  };
+
+  // ===== Tools =====
+  const Tool = { Select:'select', Rect:'rect', Ellipse:'ellipse', Text:'text', Arrow:'arrow' };
+  let currentTool = Tool.Select;
+
+  function updateToolButtons(){
+    [ui.toolSelect,ui.toolRect,ui.toolEllipse,ui.toolText,ui.toolArrow].forEach(b=>b.setAttribute('aria-pressed','false'));
+    ({select:ui.toolSelect, rect:ui.toolRect, ellipse:ui.toolEllipse, text:ui.toolText, arrow:ui.toolArrow}[currentTool]).setAttribute('aria-pressed','true');
+  }
+  function setTool(t){ currentTool=t; canvas.isDrawingMode=false; updateToolButtons(); }
+
+  ui.toolSelect.addEventListener('click', ()=>setTool(Tool.Select));
+  ui.toolRect  .addEventListener('click', ()=>setTool(Tool.Rect));
+  ui.toolEllipse.addEventListener('click', ()=>setTool(Tool.Ellipse));
+  ui.toolText  .addEventListener('click', ()=>setTool(Tool.Text));
+  ui.toolArrow .addEventListener('click', ()=>setTool(Tool.Arrow));
+
+  // ===== History =====
+  const history = { undo:[], redo:[] };
+  function saveState(){
+    const json = canvas.toDatalessJSON(['isNode','isArrow','attach','_id']);
+    history.undo.push(JSON.stringify(json));
+    if(history.undo.length>100) history.undo.shift();
+    history.redo.length=0;
+  }
+  function loadState(state){
+    canvas.loadFromJSON(JSON.parse(state), ()=>canvas.renderAll());
+  }
+  function doUndo(){ if(history.undo.length>1){ const cur=history.undo.pop(); history.redo.push(cur); loadState(history.undo.at(-1)); } }
+  function doRedo(){ if(history.redo.length){ const next=history.redo.pop(); history.undo.push(next); loadState(next); } }
+
+  ui.btnUndo.addEventListener('click', doUndo);
+  ui.btnRedo.addEventListener('click', doRedo);
+
+  saveState();
+  ['object:added','object:modified','object:removed'].forEach(ev=>canvas.on(ev, saveState));
+
+  // ===== Styles =====
+  function commonStyle(){
+    return {
+      fill: ui.fillColor.value + 'cc',
+      stroke: ui.strokeColor.value,
+      strokeWidth: parseInt(ui.strokeWidth.value,10),
+      cornerColor:'#5da8ff', borderColor:'#5da8ff',
+      transparentCorners:false, cornerStyle:'circle', padding:4
+    };
+  }
+
+  // ===== Nodes (shape only; text is on-demand) =====
+  let nodeSeq=1;
+  function makeNode(shapeObj, cx, cy, w, h){
+    const group = new fabric.Group([shapeObj], {
+      left: cx - w/2, top: cy - h/2, ...commonStyle(), hasRotatingPoint:false, subTargetCheck:true
+    });
+    group.isNode = true;
+    group._id = 'node_' + (nodeSeq++);
+    // double click => add/edit textbox
+    group.on('mousedblclick', ()=>{
+      let textbox = group._objects.find(o=>o.type==='textbox');
+      if(!textbox){
+        textbox = new fabric.Textbox('', {
+          fontSize:16, fill: ui.strokeColor.value, textAlign:'center', width: Math.max(60, w-16),
+          originX:'center', originY:'center'
+        });
+        group.addWithUpdate(textbox);
+        textbox.setPositionByOrigin(group.getCenterPoint(),'center','center');
+      }
+      canvas.setActiveObject(textbox);
+      textbox.enterEditing();
+      textbox.hiddenTextarea && textbox.hiddenTextarea.focus();
+    });
+    group.on('moving', ()=> updateArrowsForNode(group));
+    return group;
+  }
+
+  function addRectAtTopLeft(x,y){
+    x = Math.round(x/SNAP_GRID)*SNAP_GRID; y = Math.round(y/SNAP_GRID)*SNAP_GRID;
+    const w=160,h=90;
+    const rect = new fabric.Rect({ width:w,height:h, rx:12, ry:12, originX:'left', originY:'top', ...commonStyle() });
+    const node = makeNode(rect, x + w/2, y + h/2, w, h);
+    canvas.add(node).setActiveObject(node);
+  }
+  function addEllipseAtTopLeft(x,y){
+    x = Math.round(x/SNAP_GRID)*SNAP_GRID; y = Math.round(y/SNAP_GRID)*SNAP_GRID;
+    const rx=90, ry=60, w=rx*2, h=ry*2;
+    const el = new fabric.Ellipse({ rx, ry, originX:'left', originY:'top', width:w, height:h, ...commonStyle() });
+    const node = makeNode(el, x + w/2, y + h/2, w, h);
+    canvas.add(node).setActiveObject(node);
+  }
+
+  // ===== Node anchors & snapping =====
+  function getNodeAnchors(node){
+    const a=node.aCoords;
+    const top={x:(a.tl.x+a.tr.x)/2,y:(a.tl.y+a.tr.y)/2};
+    const bottom={x:(a.bl.x+a.br.x)/2,y:(a.bl.y+a.br.y)/2};
+    const left={x:(a.tl.x+a.bl.x)/2,y:(a.tl.y+a.bl.y)/2};
+    const right={x:(a.tr.x+a.br.x)/2,y:(a.tr.y+a.br.y)/2};
+    const center=node.getCenterPoint();
+    return {top,bottom,left,right,center};
+  }
+  function findSnapToNode(pt){
+    const nodes=canvas.getObjects().filter(o=>o.isNode);
+    let best=null,bestD=Infinity,bestNode=null,bestKey=null;
+    nodes.forEach(n=>{
+      const anchors=getNodeAnchors(n);
+      for(const [k,p] of Object.entries(anchors)){
+        const d=Math.hypot(p.x-pt.x,p.y-pt.y);
+        if(d<bestD){bestD=d;best=p;bestNode=n;bestKey=k;}
+      }
+    });
+    if(best && bestD<=SNAP_PIX) return {point:best,node:bestNode,key:bestKey};
+    return null;
+  }
+
+  // ===== Arrow (absolute-positioned children to avoid layout glitches) =====
+  let arrowSeq=1;
+  function createArrowAbs(x1,y1,x2,y2){
+    const sw=parseInt(ui.strokeWidth.value,10);
+    const color=ui.strokeColor.value;
+
+    const line=new fabric.Line([x1,y1,x2,y2],{stroke:color,strokeWidth:sw,selectable:false,evented:false});
+    const head=new fabric.Triangle({
+      left:x2, top:y2, angle: Math.atan2(y2-y1,x2-x1)*180/Math.PI+90,
+      width:14+sw*2, height:18+sw*2, fill:color, originX:'center', originY:'center',
+      selectable:false, evented:false
+    });
+    const h1=new fabric.Circle({ left:x1, top:y1, radius:6, originX:'center', originY:'center',
+      fill:'#5da8ff', opacity:0.001, hasBorders:false, hasControls:false, hoverCursor:'pointer' });
+    const h2=new fabric.Circle({ left:x2, top:y2, radius:6, originX:'center', originY:'center',
+      fill:'#5da8ff', opacity:0.001, hasBorders:false, hasControls:false, hoverCursor:'pointer' });
+
+    // 子を「キャンバス座標で固定」する（Fabric v5）
+    [line,head,h1,h2].forEach(o=>o.absolutePositioned=true);
+
+    const group=new fabric.Group([line,head,h1,h2],{
+      left:0, top:0, fill:'transparent', hasControls:false, hasBorders:true, subTargetCheck:true
+    });
+    group.isArrow=true;
+    group._id='arrow_'+(arrowSeq++);
+    group.attach={from:null,to:null};
+
+    group.on('selected', ()=> setHandleOpacity(group,0.6));
+    group.on('deselected', ()=> setHandleOpacity(group,0.001));
+
+    h1.on('moving', ()=> onHandleMove(group,'from'));
+    h2.on('moving', ()=> onHandleMove(group,'to'));
+
+    return group;
+  }
+  function setHandleOpacity(arrow,op){
+    const h1=arrow._objects[2], h2=arrow._objects[3];
+    h1.set({opacity:op}); h2.set({opacity:op}); canvas.requestRenderAll();
+  }
+  function syncArrowGraphics(arrow){
+    const line=arrow._objects[0], head=arrow._objects[1], h1=arrow._objects[2], h2=arrow._objects[3];
+    line.set({x1:h1.left,y1:h1.top,x2:h2.left,y2:h2.top});
+    head.set({left:h2.left,top:h2.top,angle: Math.atan2(h2.top-h1.top,h2.left-h1.left)*180/Math.PI+90});
+    arrow.dirty=true; canvas.requestRenderAll();
+  }
+  function onHandleMove(arrow,which){
+    const handle=(which==='from')?arrow._objects[2]:arrow._objects[3];
+    const snapRes=findSnapToNode({x:handle.left,y:handle.top});
+    if(snapRes){
+      handle.set({left:snapRes.point.x, top:snapRes.point.y});
+      arrow.attach[which]={nodeId:snapRes.node._id,key:snapRes.key};
+    }else{
+      arrow.attach[which]=null;
+    }
+    syncArrowGraphics(arrow);
+  }
+  function updateArrowsForNode(node){
+    const arrows=canvas.getObjects().filter(o=>o.isArrow);
+    arrows.forEach(a=>{
+      ['from','to'].forEach(which=>{
+        const att=a.attach[which];
+        if(att && att.nodeId===node._id){
+          const anchors=getNodeAnchors(node);
+          const pt=anchors[att.key]||anchors.center;
+          const handle=(which==='from')?a._objects[2]:a._objects[3];
+          handle.set({left:pt.x, top:pt.y});
+          syncArrowGraphics(a);
+        }
+      });
+    });
+  }
+
+  // ===== Mouse & view =====
+  let isSpacePanning=false, lastPos=null;
+  let lastMouseCanvasPt={x:100,y:100};
+  function getPointer(e){
+    const p=canvas.getPointer(e);
+    return {x:Math.round(p.x/SNAP_GRID)*SNAP_GRID, y:Math.round(p.y/SNAP_GRID)*SNAP_GRID};
+  }
+  canvas.on('mouse:move', opt=>{ lastMouseCanvasPt=getPointer(opt.e); });
+
+  document.addEventListener('keydown', e=>{ if(e.code==='Space') isSpacePanning=true; },{capture:true});
+  document.addEventListener('keyup',   e=>{ if(e.code==='Space') isSpacePanning=false; },{capture:true});
+
+  canvas.on('mouse:down', opt=>{
+    if(isSpacePanning){ canvas.setCursor('grabbing'); lastPos=opt.e; return; }
+    handleToolDown(opt);
+  });
+  canvas.on('mouse:move', opt=>{
+    if(isSpacePanning && lastPos){
+      const e=opt.e, vpt=canvas.viewportTransform;
+      vpt[4]+=e.clientX-lastPos.clientX; vpt[5]+=e.clientY-lastPos.clientY;
+      canvas.requestRenderAll(); lastPos=e; return;
+    }
+    handleToolMove(opt);
+  });
+  canvas.on('mouse:up', ()=>{ canvas.setCursor('default'); lastPos=null; handleToolUp(); });
+  canvas.on('mouse:wheel', opt=>{
+    const delta=opt.e.deltaY; let z=canvas.getZoom();
+    z*=0.999**delta; z=Math.min(5,Math.max(0.2,z));
+    canvas.zoomToPoint({x:opt.e.offsetX,y:opt.e.offsetY}, z);
+    opt.e.preventDefault(); opt.e.stopPropagation();
+  });
+
+  // ===== Tool actions =====
+  let isDrawing=false, tempArrow=null;
+
+  function handleToolDown(opt){
+    const p=getPointer(opt.e);
+    if(currentTool===Tool.Rect)   return addRectAtTopLeft(p.x,p.y);
+    if(currentTool===Tool.Ellipse)return addEllipseAtTopLeft(p.x,p.y);
+    if(currentTool===Tool.Text)   return addFreeText(p);
+    if(currentTool===Tool.Arrow){
+      // 2クリック配置（必要なら維持）
+      if(!isDrawing){
+        isDrawing=true;
+        const s=findSnapToNode(p); const sp=s? s.point:p;
+        tempArrow=createArrowAbs(sp.x,sp.y, sp.x,sp.y);
+        if(s) tempArrow.attach.from={nodeId:s.node._id,key:s.key};
+        canvas.add(tempArrow).setActiveObject(tempArrow); setHandleOpacity(tempArrow,0.6);
+      }else{
+        const s=findSnapToNode(p); const ep=s? s.point:p;
+        const h2=tempArrow._objects[3]; h2.set({left:ep.x, top:ep.y});
+        if(s) tempArrow.attach.to={nodeId:s.node._id,key:s.key};
+        syncArrowGraphics(tempArrow);
+        isDrawing=false; tempArrow=null;
+      }
+    }
+  }
+  function handleToolMove(opt){
+    if(currentTool===Tool.Arrow && isDrawing && tempArrow){
+      const p=getPointer(opt.e);
+      const s=findSnapToNode(p); const ep=s? s.point:p;
+      const h2=tempArrow._objects[3];
+      h2.set({left:ep.x, top:ep.y});
+      if(s) tempArrow.attach.to={nodeId:s.node._id,key:s.key}; else tempArrow.attach.to=null;
+      syncArrowGraphics(tempArrow);
+    }
+  }
+  function handleToolUp(){}
+
+  function addFreeText(p){
+    const t=new fabric.IText('',{ left:p.x, top:p.y, fontSize:18, fill:ui.strokeColor.value });
+    canvas.add(t).setActiveObject(t);
+    t.enterEditing(); t.hiddenTextarea && t.hiddenTextarea.focus();
+  }
+
+  // ===== Fit =====
+  ui.btnFit.addEventListener('click', ()=>{
+    const objects=canvas.getObjects().filter(o=>o.visible!==false);
+    if(objects.length===0){ canvas.setViewportTransform([1,0,0,1,0,0]); canvas.renderAll(); return; }
+    const group=new fabric.Group(objects);
+    const padding=80, w=group.width+padding, h=group.height+padding;
+    const cw=canvas.getWidth(), ch=canvas.getHeight();
+    const scale=Math.min(cw/w, ch/h);
+    const center=group.getCenterPoint();
+    canvas.setViewportTransform([scale,0,0,scale, cw/2-center.x*scale, ch/2-center.y*scale]);
+    canvas.requestRenderAll(); group.destroy();
+  });
+
+  // ===== Shortcuts =====
+  document.addEventListener('keydown', ev=>{
+    if(ev.target && (ev.target.tagName==='INPUT' || ev.target.tagName==='TEXTAREA')) return;
+
+    if((ev.ctrlKey||ev.metaKey) && ev.key.toLowerCase()==='z'){ ev.preventDefault(); return doUndo(); }
+    if((ev.ctrlKey||ev.metaKey) && ev.key.toLowerCase()==='y'){ ev.preventDefault(); return doRedo(); }
+
+    const k=ev.key.toLowerCase();
+    if(k==='s'){ ev.preventDefault(); addRectAtTopLeft(lastMouseCanvasPt.x,lastMouseCanvasPt.y); }
+    if(k==='c'){ ev.preventDefault(); addEllipseAtTopLeft(lastMouseCanvasPt.x,lastMouseCanvasPt.y); }
+    if(k==='a'){ ev.preventDefault();
+      // 即時配置（マウス位置に矢印を出す）
+      const p=lastMouseCanvasPt;
+      const s=findSnapToNode(p); const sp=s? s.point:p;
+      const arrow=createArrowAbs(sp.x, sp.y, sp.x+100, sp.y); // 右向きに短い矢印
+      if(s) arrow.attach.from={nodeId:s.node._id,key:s.key};
+      canvas.add(arrow).setActiveObject(arrow); setHandleOpacity(arrow,0.6);
+    }
+    if(k==='d'){ // 選択削除
+      const sel=canvas.getActiveObjects(); if(sel && sel.length){
+        sel.forEach(o=>canvas.remove(o)); canvas.discardActiveObject(); canvas.requestRenderAll();
+      }
+    }
+  });
+
+  // ===== Buttons: delete/clear/export =====
+  ui.btnDel.addEventListener('click', ()=>{
+    const sel=canvas.getActiveObjects();
+    if(sel && sel.length){ sel.forEach(o=>canvas.remove(o)); canvas.discardActiveObject(); canvas.requestRenderAll(); }
+  });
+
+  ui.btnClearAll.addEventListener('click', ()=>{
+    const objs=canvas.getObjects().slice();
+    objs.forEach(o=>canvas.remove(o));
+    canvas.discardActiveObject(); canvas.requestRenderAll(); saveState();
+  });
+
+  function download(filename, dataUrl){ const a=document.createElement('a'); a.href=dataUrl; a.download=filename; a.click(); }
+  ui.btnPNG.addEventListener('click', ()=>{
+    const url=canvas.toDataURL({format:'png', multiplier:2, enableRetinaScaling:true});
+    download('diagram.png', url);
+  });
+  ui.btnSVG.addEventListener('click', ()=>{
+    const svg=canvas.toSVG(['isNode','isArrow','attach','_id']);
+    const blob=new Blob([svg],{type:'image/svg+xml'}); const url=URL.createObjectURL(blob);
+    download('diagram.svg', url); setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
+
+  // ===== Demo objects (no default text) =====
+  addRectAtTopLeft(120,120);
+  addEllipseAtTopLeft(420,160);
+});
+</script>
+</body>
+</html>
