@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>Konva.js Advanced Sample (コメント & リファクタ済み)</title>
+  <style>
+    :root{ --hdr:54px }
+    html, body { height: 100%; margin: 0; }
+    body { background:#f5f5f5; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    header {
+      height: var(--hdr);
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 8px 12px; background:#222; color:#eee; font-size:14px;
+    }
+    #container { width: 100vw; height: calc(100vh - var(--hdr)); background:#fff; }
+    kbd { background:#444; border-radius:6px; padding:2px 6px; font-size: 12px; }
+    button {
+      border:1px solid #444; background:#333; color:#eee; padding:6px 10px; border-radius:8px; cursor:pointer;
+    }
+    button:hover { filter: brightness(1.1); }
+    .sp { flex: 1 0 8px; }
+  </style>
+  <!-- Konva.js CDN -->
+  <!-- <script src="https://cdn.jsdelivr.net/npm/konva@9.3.6/konva.min.js"></script> -->
+  <script src="https://unpkg.com/konva@10.0.2/konva.min.js"></script>
+</head>
+<body>
+  <header>
+    <strong>Konva.js サンプル</strong>
+    <span><kbd>S</kbd> 矩形</span>
+    <span><kbd>C</kbd> 円</span>
+    <span><kbd>T</kbd> テキスト</span>
+    <span><kbd>A</kbd> 矢印</span>
+    <span><kbd>D</kbd> 削除 / <kbd>Shift+D</kbd> 複製</span>
+    <span><kbd>Ctrl+Z</kbd> 戻る（20段）</span>
+    <span class="sp"></span>
+    <button id="btn-export">PNG出力</button>
+    <button id="btn-clear">クリア</button>
+  </header>
+  <div id="container"></div>
+
+  <script>
+    // ================================
+    // 基本セットアップ
+    // ================================
+
+    /**
+     * CSSカスタムプロパティで指定したヘッダー高さ(px)を取得する。
+     * @returns {number} ヘッダー高さ（px）
+     */
+    function getHeaderHeight() {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue('--hdr');
+      // `--hdr` は "54px" のような文字列。parseIntで数値化。
+      return parseInt(raw, 10);
+    }
+
+    // Stage（キャンバス）を生成
+    const stage = new Konva.Stage({
+      container: 'container',
+      width: window.innerWidth,
+      height: window.innerHeight - getHeaderHeight()
+    });
+
+    // 描画レイヤ（Undo復元で子を差し替えるため let）
+    let layer = new Konva.Layer();
+    stage.add(layer);
+
+    // 背景（空クリックで選択解除用）
+    let bg = new Konva.Rect({
+      x: 0, y: 0,
+      width: stage.width(),
+      height: stage.height(),
+      fill: '#ffffff',
+      name: 'bg'
+    });
+    layer.add(bg);
+    bg.moveToBottom();
+
+    // 変形・選択用Transformer（復元で差し替える可能性があるため let）
+    let tr = new Konva.Transformer({
+      rotateEnabled: true,
+      enabledAnchors: [
+        'top-left','top-right','bottom-left','bottom-right',
+        'middle-left','middle-right','top-center','bottom-center'
+      ],
+      anchorSize: 8
+    });
+    layer.add(tr);
+
+    // ================================
+    // 定数・ユーティリティ
+    // ================================
+
+    const SNAP_DIST = 16;        // アンカーへのスナップ許容距離(px)
+    let guidCounter = 1;         // 図形ID採番
+    let lastPointer = {          // 直近のマウス位置（左上配置の基準）
+      x: stage.width() / 2,
+      y: stage.height() / 2
+    };
+
+    /**
+     * ランダム整数を返す。
+     * @param {number} min - 最小値（含む）
+     * @param {number} max - 最大値（含む）
+     * @returns {number} 乱数
+     */
+    function rand(min, max) {
+      const span = max - min + 1;
+      return Math.floor(Math.random() * span) + min;
+    }
+
+    /**
+     * ランダムなHSLカラーを返す。
+     * @returns {string} hsl表現の色
+     */
+    function randColor() {
+      const hue = rand(0, 359);
+      return `hsl(${hue} 70% 65%)`;
+    }
+
+    /**
+     * 新しいGUID（図形識別子）を取得。
+     * @returns {string} GUID
+     */
+    function nextGuid() {
+      const id = `n${guidCounter}`;
+      guidCounter += 1;
+      return id;
+    }
+
+    /**
+     * 選択解除してレイヤーを再描画。
+     * @returns {void}
+     */
+    function clearSelection() {
+      tr.nodes([]);
+      layer.draw();
+    }
+
+    /**
+     * 指定ノードを選択状態にしてレイヤーを再描画。
+     * @param {Konva.Node} node - 選択するノード
+     * @returns {void}
+     */
+    function selectNode(node) {
+      tr.nodes([node]);
+      layer.draw();
+    }
+
+    /**
+     * ノードのクライアント矩形（影など除外可能）を取得。
+     * @param {Konva.Node} node - 対象ノード
+     * @returns {Konva.RectConfig} bbox
+     */
+    function bboxOf(node) {
+      return node.getClientRect({
+        skipShadow: true,
+        skipStroke: false
+      });
+    }
+
+    // ================================
+    // マウス座標の追跡
+    // ================================
+
+    /**
+     * ステージの現在ポインタ位置を lastPointer に保持する。
+     * @returns {void}
+     */
+    function updatePointer() {
+      const p = stage.getPointerPosition();
+      if (p) {
+        lastPointer = { x: p.x, y: p.y };
+      }
+    }
+    stage.on('mousemove touchmove', updatePointer);
+
+    // ================================
+    // アンカー（スナップ）関連
+    // ================================
+
+    /**
+     * 図形のスナップ可能な8点（四隅＋辺の中点）を返す。
+     * @param {Konva.Node} node - 図形ノード
+     * @returns {{k:string,x:number,y:number}[]} アンカーポイント配列
+     */
+    function anchorPointsOfShape(node) {
+      const b = bboxOf(node);
+      const midX = b.x + b.width / 2;
+      const midY = b.y + b.height / 2;
+      return [
+        { k: 'tl', x: b.x,           y: b.y },
+        { k: 'tr', x: b.x + b.width, y: b.y },
+        { k: 'bl', x: b.x,           y: b.y + b.height },
+        { k: 'br', x: b.x + b.width, y: b.y + b.height },
+        { k: 'tm', x: midX,          y: b.y },
+        { k: 'bm', x: midX,          y: b.y + b.height },
+        { k: 'ml', x: b.x,           y: midY },
+        { k: 'mr', x: b.x + b.width, y: midY }
+      ];
+    }
+
+    /**
+     * 画面上の全図形から、与点に最も近いアンカーを見つける。
+     * スナップ距離内に無ければ null を返す。
+     * @param {number} x - 判定点X
+     * @param {number} y - 判定点Y
+     * @returns {{node:Konva.Node,anchor:{k:string,x:number,y:number},dist:number}|null}
+     */
+    function findNearestAnchor(x, y) {
+      let best = null;
+      let bestDistance = Infinity;
+
+      layer.find('.shape').each((node) => {
+        const points = anchorPointsOfShape(node);
+        points.forEach((pt) => {
+          const dx = x - pt.x;
+          const dy = y - pt.y;
+          const distance = Math.hypot(dx, dy);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = { node, anchor: pt, dist: distance };
+          }
+        });
+      });
+
+      const withinSnap = best && best.dist <= SNAP_DIST;
+      return withinSnap ? best : null;
+    }
+
+    // ================================
+    // Undo（Layerのみスナップショット）
+    // ================================
+
+    /** @type {string[]} */
+    const history = [];
+
+    /**
+     * 現在レイヤーのJSONを取得。
+     * @returns {string} JSON文字列
+     */
+    function snapshotJSON() {
+      return layer.toJSON();
+    }
+
+    /**
+     * 履歴へ現在状態をプッシュ（最大20段）。
+     * @returns {void}
+     */
+    function pushHistory() {
+      history.push(snapshotJSON());
+      if (history.length > 20) {
+        history.shift();
+      }
+    }
+
+    /**
+     * JSONからLayerを復元し、イベント／ハンドルを再バインドする。
+     * 既存Stageはそのまま・Layerの「子のみ」差し替え。
+     * @param {string} json - Layer.toJSON() の結果
+     * @returns {void}
+     */
+    function restoreFromJSON(json) {
+      // 一時Layer（container不要）を生成
+      const tempLayer = Konva.Node.create(json);
+
+      // 既存layerの子を全削除
+      layer.destroyChildren();
+
+      // 一時Layerの子を既存layerへ移植
+      tempLayer.getChildren().forEach((child) => {
+        layer.add(child);
+      });
+
+      // 背景再確保
+      bg = layer.findOne('.bg');
+      if (!bg) {
+        bg = new Konva.Rect({
+          x: 0, y: 0,
+          width: stage.width(),
+          height: stage.height(),
+          fill: '#ffffff',
+          name: 'bg'
+        });
+        layer.add(bg);
+        bg.moveToBottom();
+      }
+
+      // Transformer再確保
+      const foundTransformer = layer.findOne('Transformer');
+      if (foundTransformer) {
+        tr = foundTransformer;
+      } else {
+        tr = new Konva.Transformer({
+          rotateEnabled: true,
+          enabledAnchors: [
+            'top-left','top-right','bottom-left','bottom-right',
+            'middle-left','middle-right','top-center','bottom-center'
+          ],
+          anchorSize: 8
+        });
+        layer.add(tr);
+      }
+
+      // 背景クリックで選択解除
+      bg.off('mousedown touchstart');
+      bg.on('mousedown touchstart', clearSelection);
+
+      // 復元後のイベント再バインド
+      rebindAllHandlers();
+
+      layer.draw();
+    }
+
+    // ================================
+    // 図形ラベル（図形中央にテキスト）
+    // ================================
+
+    /**
+     * 図形に紐づくテキストを図形中央へ配置。
+     * @param {Konva.Node} node - 図形
+     * @returns {void}
+     */
+    function positionAttachedText(node) {
+      if (!node._attachedText) {
+        return;
+      }
+      const t = node._attachedText;
+
+      // 一旦描画してテキストサイズを確定
+      layer.batchDraw();
+
+      const b = bboxOf(node);
+      const tw = t.width();
+      const th = t.height();
+
+      const x = b.x + b.width / 2 - tw / 2;
+      const y = b.y + b.height / 2 - th / 2;
+
+      t.x(x);
+      t.y(y);
+
+      layer.batchDraw();
+    }
+
+    // ================================
+    // ノード共通ハンドラ
+    // ================================
+
+    /**
+     * 図形ノードに共通イベントを付与する。
+     * - クリックで選択
+     * - ホバーでカーソル変更
+     * - 移動/変形でラベル・接続ハンドル追従
+     * - ダブルクリックでラベル編集
+     * @param {Konva.Node} node - 対象ノード
+     * @returns {void}
+     */
+    function attachCommonHandlers(node) {
+      // 選択
+      node.on('mousedown touchstart', () => {
+        selectNode(node);
+      });
+
+      // カーソル
+      node.on('mouseover', () => {
+        document.body.style.cursor = 'move';
+      });
+      node.on('mouseout', () => {
+        document.body.style.cursor = 'default';
+      });
+
+      // 移動・変形 → ラベル/矢印ハンドル追従
+      node.on('dragmove transform transformend', () => {
+        positionAttachedText(node);
+        updateAttachedArrowHandles(node);
+      });
+
+      // ダブルクリック → ラベル編集
+      node.on('dblclick dbltap', () => {
+        const currentText = node._attachedText ? node._attachedText.text() : '';
+        const input = window.prompt('図形に表示するテキストを入力してください', currentText);
+
+        if (input === null) {
+          return; // キャンセル
+        }
+
+        // テキスト初回生成 or 更新
+        if (!node._attachedText) {
+          const t = new Konva.Text({
+            text: input,
+            fontSize: 18,
+            fontFamily: 'system-ui, sans-serif',
+            fill: '#111',
+            padding: 4,
+            listening: false,  // クリックを図形へ通す
+            name: 'shape-label'
+          });
+          t.setAttr('attachedToGuid', node.getAttr('guid'));
+          node._attachedText = t;
+          layer.add(t);
+        } else {
+          node._attachedText.text(input);
+        }
+
+        // 位置合わせ & 履歴保存
+        positionAttachedText(node);
+        pushHistory();
+      });
+    }
+
+    // ================================
+    // 矢印・ハンドル関連
+    // ================================
+
+    /**
+     * 内部IDからノードを取得（Layer直下探索）。
+     * @param {number} id - Konva内部ID
+     * @returns {Konva.Node|null} 見つからない場合は null
+     */
+    function findByInternalId(id) {
+      let found = null;
+      layer.getChildren().each((n) => {
+        if (n._id === id) {
+          found = n;
+        }
+      });
+      return found;
+    }
+
+    /**
+     * 矢印の points をハンドル位置から再計算。
+     * @param {Konva.Arrow} arrow - 対象矢印
+     * @returns {void}
+     */
+    function updateArrowPointsFromHandles(arrow) {
+      if (!arrow || !arrow._h1 || !arrow._h2) {
+        return;
+      }
+      const x1 = arrow._h1.x();
+      const y1 = arrow._h1.y();
+      const x2 = arrow._h2.x();
+      const y2 = arrow._h2.y();
+      arrow.points([x1, y1, x2, y2]);
+    }
+
+    /**
+     * 図形と接続しているハンドルの位置を、図形のアンカーに合わせて再配置。
+     * @param {Konva.Node} shape - 図形
+     * @returns {void}
+     */
+    function updateAttachedArrowHandles(shape) {
+      const guid = shape.getAttr('guid');
+      if (!guid) {
+        return;
+      }
+
+      const anchors = anchorPointsOfShape(shape);
+      const map = {};
+      anchors.forEach((a) => {
+        map[a.k] = a;
+      });
+
+      layer.find('.arrow-handle').each((handle) => {
+        const attachedGuid = handle.getAttr('attachedToGuid');
+        if (attachedGuid !== guid) {
+          return;
+        }
+
+        const anchorKind = handle.getAttr('anchorKind');
+        const anchor = map[anchorKind];
+        if (!anchor) {
+          return;
+        }
+
+        handle.position({ x: anchor.x, y: anchor.y });
+
+        const arrowId = handle.getAttr('forArrowId');
+        const arrow = findByInternalId(arrowId);
+        if (arrow) {
+          updateArrowPointsFromHandles(arrow);
+        }
+      });
+
+      layer.batchDraw();
+    }
+
+    /**
+     * 指定矢印に始点/終点のドラッグハンドルを生成して付与する。
+     * @param {Konva.Arrow} arrow - 矢印
+     * @returns {void}
+     */
+    function createArrowHandles(arrow) {
+      const pts = arrow.points();
+      const h1 = new Konva.Circle({
+        x: pts[0], y: pts[1],
+        radius: 6, fill: '#fff',
+        stroke: '#333', strokeWidth: 2,
+        draggable: true, name: 'arrow-handle'
+      });
+      const h2 = new Konva.Circle({
+        x: pts[2], y: pts[3],
+        radius: 6, fill: '#fff',
+        stroke: '#333', strokeWidth: 2,
+        draggable: true, name: 'arrow-handle'
+      });
+
+      // どの矢印のどちら側かをメタデータに持たせる
+      h1.setAttr('forArrowId', arrow._id);
+      h1.setAttr('which', 'start');
+      h2.setAttr('forArrowId', arrow._id);
+      h2.setAttr('which', 'end');
+
+      layer.add(h1);
+      layer.add(h2);
+
+      /**
+       * ハンドル共通のドラッグ処理（スナップ＆矢印更新）
+       * @param {Konva.Circle} handle - 対象ハンドル
+       */
+      function bindHandleDrag(handle) {
+        handle.on('dragmove', () => {
+          const snap = findNearestAnchor(handle.x(), handle.y());
+
+          if (snap) {
+            // スナップ先に吸着
+            handle.x(snap.anchor.x);
+            handle.y(snap.anchor.y);
+
+            // このハンドルがどの図形のどのアンカーに接続しているかを覚える
+            const guid = snap.node.getAttr('guid');
+            handle.setAttr('attachedToGuid', guid);
+            handle.setAttr('anchorKind', snap.anchor.k);
+          } else {
+            // 接続解除（フリー）
+            handle.setAttr('attachedToGuid', null);
+            handle.setAttr('anchorKind', null);
+          }
+
+          // 矢印の points を更新
+          const arrowId = handle.getAttr('forArrowId');
+          const ar = findByInternalId(arrowId);
+          updateArrowPointsFromHandles(ar);
+
+          layer.batchDraw();
+        });
+
+        handle.on('dragend', () => {
+          pushHistory();
+        });
+
+        // ハンドル選択時はTransformer解除
+        handle.on('mousedown touchstart', () => {
+          clearSelection();
+        });
+      }
+
+      bindHandleDrag(h1);
+      bindHandleDrag(h2);
+
+      // 矢印オブジェクトへハンドル参照を保持
+      arrow._h1 = h1;
+      arrow._h2 = h2;
+    }
+
+    /**
+     * 矢印本体にイベントを付与（本体ドラッグは無効化）。
+     * @param {Konva.Arrow} arrow - 矢印
+     * @returns {void}
+     */
+    function attachArrowHandlers(arrow) {
+      arrow.on('mousedown touchstart', () => {
+        selectNode(arrow);
+      });
+
+      // 本体は編集禁止（ハンドルでのみ編集）
+      // arrow.draggable(false);
+      arrow.draggable(true);
+    }
+
+    /**
+     * 復元後に必要な各種イベントをすべて再バインドする。
+     * - 既存の矢印ハンドルは作り直し（IDが変わるため）
+     * - 図形のラベル関連の再リンク
+     * @returns {void}
+     */
+    function rebindAllHandlers() {
+      // 既存ハンドルは削除して再生成する
+      layer.find('.arrow-handle').each((h) => h.destroy());
+
+      // 図形（共通ハンドラ＆ラベル再リンク）
+      layer.find('.shape').each((node) => {
+        attachCommonHandlers(node);
+        const guid = node.getAttr('guid');
+
+        const label = layer.findOne(`.shape-label[attachedToGuid="${guid}"]`);
+        if (label) {
+          node._attachedText = label;
+          positionAttachedText(node);
+        } else {
+          node._attachedText = null;
+        }
+      });
+
+      // 矢印（ハンドル生成し直し）
+      layer.find('.arrow').each((arrow) => {
+        attachArrowHandlers(arrow);
+        createArrowHandles(arrow);
+        updateArrowPointsFromHandles(arrow);
+      });
+
+      // 背景クリックで選択解除
+      bg.off('mousedown touchstart');
+      bg.on('mousedown touchstart', clearSelection);
+    }
+
+    // ================================
+    // 図形生成（左上＝ポインタ位置）
+    // ================================
+
+    /**
+     * 矩形を追加（左上＝マウス位置）。
+     * @returns {void}
+     */
+    function addRect() {
+      const rectWidth  = 140;
+      const rectHeight = 90;
+
+      const rect = new Konva.Rect({
+        x: lastPointer.x,
+        y: lastPointer.y,
+        width: rectWidth,
+        height: rectHeight,
+        fill: randColor(),
+        stroke: '#333',
+        strokeWidth: 2,
+        cornerRadius: 6,
+        draggable: true,
+        name: 'shape'
+      });
+
+      rect.setAttr('guid', nextGuid());
+      attachCommonHandlers(rect);
+      layer.add(rect);
+      selectNode(rect);
+      pushHistory();
+    }
+
+    /**
+     * 円を追加（左上＝マウス位置。Konva.Circleは中心指定のため補正）
+     * @returns {void}
+     */
+    function addCircle() {
+      const radius = 55;
+
+      const circle = new Konva.Circle({
+        x: lastPointer.x + radius,
+        y: lastPointer.y + radius,
+        radius,
+        fill: randColor(),
+        stroke: '#333',
+        strokeWidth: 2,
+        draggable: true,
+        name: 'shape'
+      });
+
+      circle.setAttr('guid', nextGuid());
+      attachCommonHandlers(circle);
+      layer.add(circle);
+      selectNode(circle);
+      pushHistory();
+    }
+
+    /**
+     * テキストを追加（左上＝マウス位置）。
+     * @param {string} [txt='テキスト'] - 初期文字列
+     * @returns {void}
+     */
+    function addTextShape(txt = 'テキスト') {
+      const text = new Konva.Text({
+        x: lastPointer.x,
+        y: lastPointer.y,
+        text: txt,
+        fontSize: 24,
+        fontFamily: 'system-ui, sans-serif',
+        fill: '#111',
+        draggable: true,
+        padding: 6,
+        align: 'left',
+        name: 'shape'
+      });
+
+      text.setAttr('guid', nextGuid());
+      attachCommonHandlers(text);
+      layer.add(text);
+      selectNode(text);
+      pushHistory();
+    }
+
+    /**
+     * 矢印を追加（デフォルトは右向き水平）。
+     * @returns {void}
+     */
+    function addArrow() {
+      const defaultLength = 140;
+      const points = [
+        lastPointer.x,            lastPointer.y,
+        lastPointer.x + defaultLength, lastPointer.y
+      ];
+
+      const arrow = new Konva.Arrow({
+        points,
+        stroke: '#333',
+        fill: '#333',
+        strokeWidth: 2,
+        pointerLength: 12,
+        pointerWidth: 12,
+        name: 'arrow'
+      });
+
+      arrow.setAttr('guid', nextGuid());
+      layer.add(arrow);
+
+      attachArrowHandlers(arrow);
+      // createArrowHandles(arrow);
+
+      selectNode(arrow);
+      pushHistory();
+    }
+
+    // ================================
+    // 背景／リサイズ
+    // ================================
+
+    // 背景クリックで選択解除
+    bg.on('mousedown touchstart', clearSelection);
+
+    // ウィンドウリサイズ → ステージ＆背景を更新
+    window.addEventListener('resize', () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight - getHeaderHeight();
+      stage.size({ width: w, height: h });
+
+      if (bg) {
+        bg.size({ width: w, height: h });
+      }
+      layer.batchDraw();
+    });
+
+    // ================================
+    // キーボードショートカット
+    // ================================
+
+    /**
+     * Undo（Ctrl/Cmd+Z）
+     * @returns {void}
+     */
+    function handleUndo() {
+      // 履歴が2つ以上あるときのみ（現在＋1つ前）
+      const hasUndo = history.length > 1;
+      if (!hasUndo) {
+        return;
+      }
+
+      // 現在状態を捨てて、1つ前を復元
+      history.pop();
+      const prevJSON = history[history.length - 1];
+      restoreFromJSON(prevJSON);
+    }
+
+    /**
+     * Delete/Backspace で選択ノードを削除。
+     * @returns {void}
+     */
+    function handleDeleteSelection() {
+      const nodes = tr.nodes();
+      const hasSelection = nodes.length > 0;
+      if (!hasSelection) {
+        return;
+      }
+
+      nodes.forEach((n) => {
+        // 図形に付随するラベルがあれば一緒に破棄
+        if (n._attachedText) {
+          n._attachedText.destroy();
+        }
+        // 矢印ならハンドルも破棄
+        const isArrow = n.hasName && n.hasName('arrow');
+        if (isArrow) {
+          if (n._h1) n._h1.destroy();
+          if (n._h2) n._h2.destroy();
+        }
+        n.destroy();
+      });
+
+      clearSelection();
+      pushHistory();
+    }
+
+    /**
+     * Shift+D で選択ノードを複製。
+     * @returns {void}
+     */
+    function handleDuplicateSelection() {
+      const nodes = tr.nodes();
+      const hasSelection = nodes.length > 0;
+      if (!hasSelection) {
+        return;
+      }
+
+      nodes.forEach((n) => {
+        // 本体クローン
+        const clone = n.clone({
+          x: n.x() + 20,
+          y: n.y() + 20
+        });
+        layer.add(clone);
+
+        // 付随ラベルのクローン／紐付け直し
+        if (n._attachedText) {
+          const labelClone = n._attachedText.clone();
+          layer.add(labelClone);
+
+          const guid = nextGuid();
+          clone.setAttr('guid', guid);
+          labelClone.setAttr('attachedToGuid', guid);
+          clone._attachedText = labelClone;
+
+          positionAttachedText(clone);
+        } else {
+          const isShape = clone.hasName && clone.hasName('shape');
+          if (isShape) {
+            clone.setAttr('guid', nextGuid());
+          }
+        }
+
+        // 矢印のハンドル作り直し
+        const isArrow = n.hasName && n.hasName('arrow');
+        if (isArrow) {
+          clone.setAttr('guid', nextGuid());
+          createArrowHandles(clone);
+
+          const pts = clone.points();
+          clone._h1.position({ x: pts[0], y: pts[1] });
+          clone._h2.position({ x: pts[2], y: pts[3] });
+        }
+
+        // ハンドラ再付与
+        attachCommonHandlers(clone);
+        if (clone.hasName && clone.hasName('arrow')) {
+          attachArrowHandlers(clone);
+        }
+      });
+
+      pushHistory();
+    }
+
+    // キーダウン・ディスパッチ
+    window.addEventListener('keydown', (e) => {
+      const tagName = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+      const isTyping = (tagName === 'input' || tagName === 'textarea');
+      if (isTyping) {
+        return; // フォーム入力中は無効化
+      }
+
+      // Ctrl/Cmd + Z → Undo
+      const isUndo = (e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'z');
+      if (isUndo) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      // 単体キーを小文字で取得
+      const key = e.key.toLowerCase();
+
+      // 作図ショートカット
+      if (key === 's') {            // 矩形
+        e.preventDefault();
+        addRect();
+        return;
+      }
+      if (key === 'c') {            // 円
+        e.preventDefault();
+        addCircle();
+        return;
+      }
+      if (key === 't') {            // テキスト
+        e.preventDefault();
+        const input = window.prompt('追加するテキストを入力してください', '新しいテキスト');
+        const hasText = (input !== null && input !== '');
+        if (hasText) {
+          addTextShape(input);
+        }
+        return;
+      }
+      if (key === 'a') {            // 矢印
+        e.preventDefault();
+        addArrow();
+        return;
+      }
+
+      // 削除 / 複製
+      const isDelete = (key === 'd' && !e.shiftKey);
+      if (isDelete) {
+        e.preventDefault();
+        handleDeleteSelection();
+        return;
+      }
+      const isDuplicate = (key === 'd' && e.shiftKey);
+      if (isDuplicate) {
+        e.preventDefault();
+        handleDuplicateSelection();
+        return;
+      }
+    });
+
+    // ================================
+    // PNG出力 / クリア
+    // ================================
+
+    /**
+     * ステージ内容をPNGとしてダウンロードする。
+     * @returns {void}
+     */
+    function exportPng() {
+      const uri = stage.toDataURL({ pixelRatio: 2 });
+      const a = document.createElement('a');
+      a.href = uri;
+      a.download = 'canvas.png';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    /**
+     * 図形を全削除（背景とTransformerは残す）。
+     * @returns {void}
+     */
+    function clearAllShapes() {
+      layer.getChildren().forEach((node) => {
+        const isProtected = (node === bg || node === tr);
+        if (!isProtected) {
+          node.destroy();
+        }
+      });
+      clearSelection();
+      pushHistory();
+    }
+
+    document.getElementById('btn-export').addEventListener('click', exportPng);
+    document.getElementById('btn-clear').addEventListener('click', clearAllShapes);
+
+    // ================================
+    // 初期デモ & 初期履歴
+    // ================================
+
+    (function initDemo() {
+      addRect();
+      addCircle();
+      addTextShape('ダブルクリックで図形ラベル');
+      // 初期状態の履歴を1つ積んでおく（初回Undo向け）
+      // 直上の add 系で pushHistory されているため、追加は不要です。
+    })();
+  </script>
+</body>
+</html>
