@@ -2,12 +2,12 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <title>簡易作図ツール (Fabric.js) – 修正版</title>
+  <title>簡易作図ツール (Fabric.js 6.7.1)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <script src="https://cdn.jsdelivr.net/npm/fabric@5.3.0/dist/fabric.min.js"></script>
+  <!-- Fabric.js 6.7.1（指定CDN） -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/671/index.min.js"></script>
   <style>
-    :root{ --bg:#0f1216; --panel:#171b21; --bd:#2a2f36; --txt:#e8eef6; --sub:#9aa4b2;
-           --btn:#222833; --btn-h:#2a3240; --acc:#5da8ff; }
+    :root{ --bg:#0f1216; --panel:#171b21; --bd:#2a2f36; --txt:#e8eef6; --sub:#9aa4b2; --btn:#222833; --btn-h:#2a3240; --acc:#5da8ff; }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;}
     .wrap{display:grid;grid-template-rows:auto 1fr;height:100%;}
     .toolbar{display:flex;gap:.5rem;align-items:center;padding:.5rem .75rem;background:var(--panel);border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;}
@@ -63,20 +63,27 @@ window.addEventListener('DOMContentLoaded', () => {
     subTargetCheck:true
   });
 
-  // ===== Grid =====
-  const gridMinor=20, gridMajor=100, SNAP_GRID=10, SNAP_PIX=15;
+  // ===== Grid（v6: backgroundImage に直接代入） =====
+  const gridMinor=20, gridMajor=100, SNAP_GRID=10, SNAP_PIX=24; // ← スナップ距離を拡大
   function drawGrid(){
-    const w=canvas.getWidth(), h=canvas.getHeight();
-    const bg=new fabric.StaticCanvas(null,{width:w,height:h});
-    const ctx=bg.getContext('2d');
-    ctx.clearRect(0,0,w,h);
-    ctx.lineWidth=1; ctx.strokeStyle='rgba(255,255,255,0.05)';
-    for(let x=0;x<=w;x+=gridMinor){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
-    for(let y=0;y<=h;y+=gridMinor){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
-    ctx.strokeStyle='rgba(93,168,255,0.22)';
-    for(let x=0;x<=w;x+=gridMajor){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
-    for(let y=0;y<=h;y+=gridMajor){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
-    canvas.setBackgroundImage(bg.toDataURL(), canvas.requestRenderAll.bind(canvas));
+    const w = canvas.getWidth(), h = canvas.getHeight();
+    const off = document.createElement('canvas'); off.width=w; off.height=h;
+    const ctx = off.getContext('2d');
+    ctx.clearRect(0,0,w,h); ctx.lineWidth = 1;
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    for(let x=0; x<=w; x+=gridMinor){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+    for(let y=0; y<=h; y+=gridMinor){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+
+    ctx.strokeStyle = 'rgba(93,168,255,0.22)';
+    for(let x=0; x<=w; x+=gridMajor){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+    for(let y=0; y<=h; y+=gridMajor){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+
+    fabric.Image.fromURL(off.toDataURL(), (img) => {
+      img.selectable=false; img.evented=false; img.set({left:0, top:0, originX:'left', originY:'top'});
+      canvas.backgroundImage = img;
+      canvas.requestRenderAll();
+    });
   }
   drawGrid();
 
@@ -136,29 +143,39 @@ window.addEventListener('DOMContentLoaded', () => {
     };
   }
 
-  // ===== Nodes (shape only; text is on-demand) =====
+  // ===== Nodes =====
   let nodeSeq=1;
+  function addChildToGroup(group, child){
+    if (group.addWithUpdate) { group.addWithUpdate(child); }
+    else { group.add(child); group._calcBounds && group._calcBounds(); group._updateObjectsCoords && group._updateObjectsCoords(); group.setCoords(); }
+  }
+  function bindDblclick(obj, handler){
+    obj.on && obj.on('mousedblclick', handler);
+    obj.on && obj.on('mouse:dblclick', handler);
+  }
+
   function makeNode(shapeObj, cx, cy, w, h){
     const group = new fabric.Group([shapeObj], {
       left: cx - w/2, top: cy - h/2, ...commonStyle(), hasRotatingPoint:false, subTargetCheck:true
     });
     group.isNode = true;
     group._id = 'node_' + (nodeSeq++);
-    // double click => add/edit textbox
-    group.on('mousedblclick', ()=>{
+
+    bindDblclick(group, ()=>{
       let textbox = group._objects.find(o=>o.type==='textbox');
       if(!textbox){
         textbox = new fabric.Textbox('', {
           fontSize:16, fill: ui.strokeColor.value, textAlign:'center', width: Math.max(60, w-16),
           originX:'center', originY:'center'
         });
-        group.addWithUpdate(textbox);
+        addChildToGroup(group, textbox);
         textbox.setPositionByOrigin(group.getCenterPoint(),'center','center');
       }
       canvas.setActiveObject(textbox);
       textbox.enterEditing();
       textbox.hiddenTextarea && textbox.hiddenTextarea.focus();
     });
+
     group.on('moving', ()=> updateArrowsForNode(group));
     return group;
   }
@@ -168,17 +185,17 @@ window.addEventListener('DOMContentLoaded', () => {
     const w=160,h=90;
     const rect = new fabric.Rect({ width:w,height:h, rx:12, ry:12, originX:'left', originY:'top', ...commonStyle() });
     const node = makeNode(rect, x + w/2, y + h/2, w, h);
-    canvas.add(node).setActiveObject(node);
+    canvas.add(node); canvas.setActiveObject(node); canvas.requestRenderAll();
   }
   function addEllipseAtTopLeft(x,y){
     x = Math.round(x/SNAP_GRID)*SNAP_GRID; y = Math.round(y/SNAP_GRID)*SNAP_GRID;
     const rx=90, ry=60, w=rx*2, h=ry*2;
     const el = new fabric.Ellipse({ rx, ry, originX:'left', originY:'top', width:w, height:h, ...commonStyle() });
     const node = makeNode(el, x + w/2, y + h/2, w, h);
-    canvas.add(node).setActiveObject(node);
+    canvas.add(node); canvas.setActiveObject(node); canvas.requestRenderAll();
   }
 
-  // ===== Node anchors & snapping =====
+  // ===== Anchors & snapping =====
   function getNodeAnchors(node){
     const a=node.aCoords;
     const top={x:(a.tl.x+a.tr.x)/2,y:(a.tl.y+a.tr.y)/2};
@@ -188,21 +205,44 @@ window.addEventListener('DOMContentLoaded', () => {
     const center=node.getCenterPoint();
     return {top,bottom,left,right,center};
   }
+
+  // ★ 改良：図形の**内側に重なった場合は距離に関係なく**最寄りアンカーへ接続
   function findSnapToNode(pt){
     const nodes=canvas.getObjects().filter(o=>o.isNode);
-    let best=null,bestD=Infinity,bestNode=null,bestKey=null;
+    let best=null,bestD=Infinity,bestNode=null,bestKey=null, hardInside=null;
+
+    const pObj = new fabric.Point(pt.x, pt.y);
+
     nodes.forEach(n=>{
       const anchors=getNodeAnchors(n);
+
+      // 内部ヒット（containsPoint）
+      if (n.containsPoint && n.containsPoint(pObj)) {
+        hardInside = {node:n, anchors};
+      }
+
       for(const [k,p] of Object.entries(anchors)){
         const d=Math.hypot(p.x-pt.x,p.y-pt.y);
         if(d<bestD){bestD=d;best=p;bestNode=n;bestKey=k;}
       }
     });
+
+    if (hardInside) {
+      // 内側なら最近アンカーへ即スナップ
+      const {node, anchors} = hardInside;
+      let mKey='center', mPt=anchors.center, mD=Infinity;
+      for(const [k,p] of Object.entries(anchors)){
+        const d=Math.hypot(p.x-pt.x,p.y-pt.y);
+        if(d<mD){mD=d; mPt=p; mKey=k;}
+      }
+      return {point:mPt, node, key:mKey};
+    }
+
     if(best && bestD<=SNAP_PIX) return {point:best,node:bestNode,key:bestKey};
     return null;
   }
 
-  // ===== Arrow (absolute-positioned children to avoid layout glitches) =====
+  // ===== Arrow =====
   let arrowSeq=1;
   function createArrowAbs(x1,y1,x2,y2){
     const sw=parseInt(ui.strokeWidth.value,10);
@@ -219,7 +259,6 @@ window.addEventListener('DOMContentLoaded', () => {
     const h2=new fabric.Circle({ left:x2, top:y2, radius:6, originX:'center', originY:'center',
       fill:'#5da8ff', opacity:0.001, hasBorders:false, hasControls:false, hoverCursor:'pointer' });
 
-    // 子を「キャンバス座標で固定」する（Fabric v5）
     [line,head,h1,h2].forEach(o=>o.absolutePositioned=true);
 
     const group=new fabric.Group([line,head,h1,h2],{
@@ -229,9 +268,10 @@ window.addEventListener('DOMContentLoaded', () => {
     group._id='arrow_'+(arrowSeq++);
     group.attach={from:null,to:null};
 
-    group.on('selected', ()=> setHandleOpacity(group,0.6));
+    group.on('selected', ()=> setHandleOpacity(group,0.7));
     group.on('deselected', ()=> setHandleOpacity(group,0.001));
 
+    // 端点ドラッグで角度/長さ調整 & 接続
     h1.on('moving', ()=> onHandleMove(group,'from'));
     h2.on('moving', ()=> onHandleMove(group,'to'));
 
@@ -315,14 +355,15 @@ window.addEventListener('DOMContentLoaded', () => {
     if(currentTool===Tool.Ellipse)return addEllipseAtTopLeft(p.x,p.y);
     if(currentTool===Tool.Text)   return addFreeText(p);
     if(currentTool===Tool.Arrow){
-      // 2クリック配置（必要なら維持）
+      // 1クリック目：マウス位置に即配置（始点=カーソル、終点=少し右）
       if(!isDrawing){
         isDrawing=true;
         const s=findSnapToNode(p); const sp=s? s.point:p;
-        tempArrow=createArrowAbs(sp.x,sp.y, sp.x,sp.y);
+        tempArrow=createArrowAbs(sp.x, sp.y, sp.x+100, sp.y);
         if(s) tempArrow.attach.from={nodeId:s.node._id,key:s.key};
-        canvas.add(tempArrow).setActiveObject(tempArrow); setHandleOpacity(tempArrow,0.6);
+        canvas.add(tempArrow); canvas.setActiveObject(tempArrow); setHandleOpacity(tempArrow,0.7); canvas.requestRenderAll();
       }else{
+        // 2クリック目で終点確定（スナップ）
         const s=findSnapToNode(p); const ep=s? s.point:p;
         const h2=tempArrow._objects[3]; h2.set({left:ep.x, top:ep.y});
         if(s) tempArrow.attach.to={nodeId:s.node._id,key:s.key};
@@ -345,7 +386,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   function addFreeText(p){
     const t=new fabric.IText('',{ left:p.x, top:p.y, fontSize:18, fill:ui.strokeColor.value });
-    canvas.add(t).setActiveObject(t);
+    canvas.add(t); canvas.setActiveObject(t); canvas.requestRenderAll();
     t.enterEditing(); t.hiddenTextarea && t.hiddenTextarea.focus();
   }
 
@@ -373,32 +414,30 @@ window.addEventListener('DOMContentLoaded', () => {
     if(k==='s'){ ev.preventDefault(); addRectAtTopLeft(lastMouseCanvasPt.x,lastMouseCanvasPt.y); }
     if(k==='c'){ ev.preventDefault(); addEllipseAtTopLeft(lastMouseCanvasPt.x,lastMouseCanvasPt.y); }
     if(k==='a'){ ev.preventDefault();
-      // 即時配置（マウス位置に矢印を出す）
+      // ★ キー操作でもカーソル位置に即配置
       const p=lastMouseCanvasPt;
       const s=findSnapToNode(p); const sp=s? s.point:p;
-      const arrow=createArrowAbs(sp.x, sp.y, sp.x+100, sp.y); // 右向きに短い矢印
+      const arrow=createArrowAbs(sp.x, sp.y, sp.x+100, sp.y);
       if(s) arrow.attach.from={nodeId:s.node._id,key:s.key};
-      canvas.add(arrow).setActiveObject(arrow); setHandleOpacity(arrow,0.6);
+      canvas.add(arrow); canvas.setActiveObject(arrow); setHandleOpacity(arrow,0.7); canvas.requestRenderAll();
     }
-    if(k==='d'){ // 選択削除
+    if(k==='d'){
       const sel=canvas.getActiveObjects(); if(sel && sel.length){
         sel.forEach(o=>canvas.remove(o)); canvas.discardActiveObject(); canvas.requestRenderAll();
       }
     }
   });
 
-  // ===== Buttons: delete/clear/export =====
+  // ===== Buttons =====
   ui.btnDel.addEventListener('click', ()=>{
     const sel=canvas.getActiveObjects();
     if(sel && sel.length){ sel.forEach(o=>canvas.remove(o)); canvas.discardActiveObject(); canvas.requestRenderAll(); }
   });
-
   ui.btnClearAll.addEventListener('click', ()=>{
     const objs=canvas.getObjects().slice();
     objs.forEach(o=>canvas.remove(o));
     canvas.discardActiveObject(); canvas.requestRenderAll(); saveState();
   });
-
   function download(filename, dataUrl){ const a=document.createElement('a'); a.href=dataUrl; a.download=filename; a.click(); }
   ui.btnPNG.addEventListener('click', ()=>{
     const url=canvas.toDataURL({format:'png', multiplier:2, enableRetinaScaling:true});
@@ -410,7 +449,7 @@ window.addEventListener('DOMContentLoaded', () => {
     download('diagram.svg', url); setTimeout(()=>URL.revokeObjectURL(url),1000);
   });
 
-  // ===== Demo objects (no default text) =====
+  // ===== Demo =====
   addRectAtTopLeft(120,120);
   addEllipseAtTopLeft(420,160);
 });
