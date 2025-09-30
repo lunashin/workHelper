@@ -90,17 +90,24 @@ report.docx\t6/15/2024 7:48 PM"></textarea>
 
         <div class="card">
           <h2>Teams通話履歴（相手<TAB>開始<TAB>終了）</h2>
-          <textarea id="taTeams" placeholder="XXさん\t10:00\t11:00"></textarea>
+          <textarea id="taTeams" placeholder="山田さん\t10:00\t11:00"></textarea>
         </div>
 
         <div class="card">
           <h2>Teamsチャット履歴（チャネル/スレッド名<TAB>時刻）</h2>
-          <textarea id="taTeamsChat" placeholder="案件A/仕様相談スレッド\t10:00"></textarea>
+          <textarea id="taTeamsChat" placeholder="#案件A/仕様相談スレッド\t10:00"></textarea>
         </div>
 
         <div class="card">
           <h2>会議履歴（会議名(開始 〜 終了 / 所要)）</h2>
           <textarea id="taMeet" placeholder="定例A(10:00 〜 11:00 / 1h)"></textarea>
+        </div>
+
+        <!-- ★★ 追加：ブラウザアクセス履歴 ★★ -->
+        <div class="card">
+          <h2>ブラウザアクセス履歴（DateTime<TAB>NavigatedToUrl<TAB>PageTitle）</h2>
+          <textarea id="taBrowser" placeholder="2025-09-29T23:25:21.936Z	https://mmna-my.sharepoint.com/	ホーム - OneDrive"></textarea>
+          <div class="hint">※ DateTimeはUTC。出力はJST(+9)に変換。URLは無視し、PageTitleを「名称」に使用します。</div>
         </div>
 
         <div class="card">
@@ -110,7 +117,7 @@ report.docx\t6/15/2024 7:48 PM"></textarea>
 
         <div class="card">
           <h2>カテゴリ名と条件（カテゴリ名<TAB>条件1<TAB>条件2(任意)）</h2>
-          <textarea id="taCategory" placeholder="システムA(運用)\tシステムA\t運用手順"></textarea>
+          <textarea id="taCategory" placeholder="法規(運用)\t法規\tCVE"></textarea>
           <div class="controls" style="margin-top:8px;gap:8px">
             <button id="btnLoadCategory" class="ghost">保存済みを読込</button>
             <span class="hint">※ 集計実行時に自動保存。ページ読込時も自動復元します。</span>
@@ -213,17 +220,20 @@ report.docx\t6/15/2024 7:48 PM"></textarea>
     const iso = `${Y}-${MM}-${DD}T${HH}:${mm2}:00${tz}`;
     return new Date(iso);
   }
-  function parseYmdHM(s){
-    const m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
-    if(!m) return null;
-    const [_, Y,M,D, h,min] = m.map(Number);
-    return new Date(Y, M-1, D, h, min, 0, 0);
-  }
   function parseTimeOnTargetDay(s, targetDate){
     const m = s.match(/^(\d{1,2}):(\d{2})$/);
     if(!m) return null;
     const [_,hh,mm] = m.map(Number);
     return new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), hh, mm, 0, 0);
+  }
+
+  // JST(+9)での表示用（UTCのDate -> JSTの"壁時計"に直して既存フォーマットで表示）
+  function fmtYmdHM_JST(utcDate){
+    if(!(utcDate instanceof Date) || isNaN(utcDate)) return '';
+    // 現地タイムゾーンとの差分を考慮して JST の壁時計に合わせる（日本はDSTなし）
+    const deltaMinutes = (9*60) + utcDate.getTimezoneOffset(); // +540 - localOffset
+    const jstDate = new Date(utcDate.getTime() + deltaMinutes*60000);
+    return fmtYmdHM(jstDate);
   }
 
   // ===== カテゴリ判定 =====
@@ -364,7 +374,19 @@ report.docx\t6/15/2024 7:48 PM"></textarea>
       rows.push({ type:'会議(終了)', name: title, when: de, whenStr: fmtYmdHM(de) });
     }
 
-    // 7) 勤怠情報
+    // 7) ★ ブラウザアクセス履歴：UTC -> JST(+9)表示、URLは無視、PageTitleを名称に
+    for(const line of lines(document.getElementById('taBrowser').value)){
+      const parts = line.split('\t');
+      if(parts.length < 3) continue;
+      const dtStr = String(parts[0]).trim();
+      const title = String(parts[2]).trim(); // PageTitle
+      if(!dtStr || !title) continue;
+      const du = new Date(dtStr);            // UTC ISO などに対応
+      if(isNaN(du)) continue;
+      rows.push({ type:'ブラウザ', name: title, when: du, whenStr: fmtYmdHM_JST(du) });
+    }
+
+    // 8) 勤怠情報
     const kintaiText = document.getElementById('taKintai').value;
     for(const line of lines(kintaiText)){
       const [label, timeStr] = line.split('\t');
@@ -374,12 +396,12 @@ report.docx\t6/15/2024 7:48 PM"></textarea>
       rows.push({ type:'勤怠', name: String(label).trim(), when:d, whenStr: fmtYmdHM(d) });
     }
 
-    // 8) カテゴリ付与
+    // 9) カテゴリ付与
     const catText = document.getElementById('taCategory').value;
     const catRules = parseCategoryRules(catText);
     for(const r of rows){ r.category = resolveCategory(r.name, catRules); }
 
-    // 9) 詳細付与（名称への部分一致）
+    // 10) 詳細付与（名称への部分一致）
     const detailText = document.getElementById('taDetailRules').value;
     const detailRules = parseDetailRules(detailText);
     for(const r of rows){ r.detail = resolveDetail(r.name, detailRules); }
@@ -403,8 +425,8 @@ report.docx\t6/15/2024 7:48 PM"></textarea>
   // ===== イベント配線 =====
   document.getElementById('run').addEventListener('click', runAggregation);
 
-  // 各テキストエリアの blur で自動集計
-  ['taOpen','taCreateUpdate','taMail','taTeams','taTeamsChat','taMeet','taKintai','taCategory','taDetailRules'].forEach(id=>{
+  // 各テキストエリアの blur で自動集計（ブラウザ履歴も追加）
+  ['taOpen','taCreateUpdate','taMail','taTeams','taTeamsChat','taMeet','taBrowser','taKintai','taCategory','taDetailRules'].forEach(id=>{
     const el = document.getElementById(id);
     if(el){ el.addEventListener('blur', runAggregation); }
   });
