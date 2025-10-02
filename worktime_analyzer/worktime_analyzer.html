@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>残業時間 可視化（Chart.js版：フルブリード2カラム）</title>
+<title>残業時間 可視化（Chart.js版：フルブリード2カラム・平均は稼働日のみ）</title>
 
 <!-- Chart.js CDN -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -13,77 +13,51 @@
     --bg:#0b0f14; --card:#121821; --ink:#e9f0f5; --muted:#a9b5c1;
     --accent:#7cc0ff; --accent2:#9dffa4; --warn:#ffd26f; --danger:#ff8b8b; --grid:#243141;
   }
-  body{
-    margin:0; background:var(--bg); color:var(--ink);
-    font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Noto Sans JP";
-  }
+  body{ margin:0; background:var(--bg); color:var(--ink); font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Noto Sans JP"; }
 
   /* 上段（設定/KPI）は中央寄せ */
   .wrap{ max-width:1220px; margin:32px auto; padding:0 16px; }
   h1{ font-size:20px; margin:0 0 16px; font-weight:700; letter-spacing:.2px }
-  .card{
-    background:var(--card); border:1px solid #1b2430; border-radius:16px;
-    padding:16px; margin-bottom:16px; box-shadow:0 4px 20px rgba(0,0,0,.2)
-  }
+  .card{ background:var(--card); border:1px solid #1b2430; border-radius:16px; padding:16px; margin-bottom:16px; box-shadow:0 4px 20px rgba(0,0,0,.2) }
   .toolbar{ display:grid; grid-template-columns:repeat(6,1fr); gap:12px }
   label{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px }
-  input,select,button{
-    width:100%; background:#0e141c; border:1px solid #223149; color:var(--ink);
-    border-radius:10px; padding:10px 12px; font-size:14px; outline:none;
-  }
+  input,select,button{ width:100%; background:#0e141c; border:1px solid #223149; color:var(--ink); border-radius:10px; padding:10px 12px; font-size:14px; outline:none; }
   button{ cursor:pointer; background:#173351; border-color:#2a5f99; transition:.12s filter ease }
   button:hover{ filter:brightness(1.06) }
   .kpi{ display:flex; gap:16px; flex-wrap:wrap; margin-top:12px }
-  .chip{
-    background:#0f1724; border:1px solid #20304a; border-radius:999px;
-    padding:8px 12px; font-size:12px; color:var(--muted)
-  }
+  .chip{ background:#0f1724; border:1px solid #20304a; border-radius:999px; padding:8px 12px; font-size:12px; color:var(--muted) }
   .small{ font-size:12px; color:var(--muted) }
   .row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   .row .full{ grid-column:1 / -1; }
 
   /* ===== グラフセクションだけフルブリード（画面幅いっぱい） ===== */
   .bleed{
-    width:100vw;               /* 画面幅 */
-    position:relative;
-    left:50%; right:50%;       /* 親の中央から */
-    margin-left:-50vw;         /* 画面の左端へ広げる */
-    margin-right:-50vw;        /* 画面の右端へ広げる */
-    padding:0 12px;            /* 端に少しだけ余白（必要なければ 0 に） */
-    box-sizing:border-box;
-    margin-top:16px;
-    margin-bottom:32px;
+    width:100vw; position:relative; left:50%; right:50%;
+    margin-left:-50vw; margin-right:-50vw;
+    padding:0 12px; box-sizing:border-box; margin-top:16px; margin-bottom:32px;
   }
 
   /* 2カラム（左右いっぱい） */
-  .twoCol{
-    position:relative;
-    display:grid;
-    grid-template-columns:minmax(0,1fr) minmax(0,1fr);
-    gap:16px 24px; /* rows, cols */
-  }
+  .twoCol{ position:relative; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px 24px; }
   .twoCol::before{
-    content:"";
-    position:absolute; top:0; bottom:0; left:50%;
-    width:1px; transform:translateX(-0.5px);
-    background: linear-gradient(180deg, transparent 0%, var(--grid) 10%, var(--grid) 90%, transparent 100%);
-    pointer-events:none;
+    content:""; position:absolute; top:0; bottom:0; left:50%; width:1px; transform:translateX(-0.5px);
+    background: linear-gradient(180deg, transparent 0%, var(--grid) 10%, var(--grid) 90%, transparent 100%); pointer-events:none;
   }
   .col{ min-width:0; }
 
-  /* グラフ用は左右パディングを無くして“領域いっぱい”に */
+  /* グラフは左右パディングを除去して“領域いっぱい”に */
   .card--flush{ padding:12px 0 12px 0; }
   .card--flush h2{ margin:0 12px 8px; font-size:16px; }
   .card--flush .chartWrap{ border-radius:0; border-left:0; border-right:0; }
 
-  /* Chart.js 安定描画 */
+  /* Chart.js 安定描画ラッパー */
   .chartWrap{
     position:relative; width:100%; height:360px;
     background:#0c121a; border:1px solid #1b2430; border-radius:12px; overflow:hidden
   }
   .chartWrap canvas{ display:block; width:100% !important; height:100% !important }
 
-  /* 狭幅では1カラム（区切り線オフ、カード普通の余白でOK） */
+  /* モバイル対応 */
   @media (max-width: 980px){
     .bleed{ padding:0 8px; }
     .twoCol{ grid-template-columns:1fr; }
@@ -101,22 +75,10 @@
 
     <div class="card">
       <div class="toolbar">
-        <div>
-          <label>ユーザー</label>
-          <select id="userSelect"></select>
-        </div>
-        <div>
-          <label>当月（表示用）</label>
-          <input id="monthPicker" type="month">
-        </div>
-        <div>
-          <label>所定労働時間（時/日）</label>
-          <input id="stdHours" type="number" step="0.25" value="8">
-        </div>
-        <div>
-          <label>休憩（分）</label>
-          <input id="breakMin" type="number" step="5" value="60">
-        </div>
+        <div><label>ユーザー</label><select id="userSelect"></select></div>
+        <div><label>当月（表示用）</label><input id="monthPicker" type="month"></div>
+        <div><label>所定労働時間（時/日）</label><input id="stdHours" type="number" step="0.25" value="8"></div>
+        <div><label>休憩（分）</label><input id="breakMin" type="number" step="5" value="60"></div>
         <div>
           <label>今年度開始月</label>
           <select id="fyStart">
@@ -127,20 +89,14 @@
             <option value="11">11月</option><option value="12">12月</option>
           </select>
         </div>
-        <div>
-          <label>&nbsp;</label>
-          <button id="recalcBtn">再計算</button>
-        </div>
+        <div><label>&nbsp;</label><button id="recalcBtn">再計算</button></div>
       </div>
 
       <div class="row" style="margin-top:12px">
         <div class="full">
           <label style="display:flex; gap:8px; align-items:center">
             <input id="lunchOverlapExtra" type="checkbox" checked>
-            <span class="small">
-              昼休憩(12:30–13:30)が外出に含まれる場合、<b>別途</b>休憩(指定分)を控除する
-              （例の <code>-5h</code> / <code>-1h</code> を再現）
-            </span>
+            <span class="small">昼休憩(12:30–13:30)が外出に含まれる場合、<b>別途</b>休憩(指定分)を控除（例の <code>-5h</code>/<code>-1h</code> を再現）</span>
           </label>
         </div>
       </div>
@@ -152,7 +108,8 @@
       </div>
 
       <div class="small" style="margin-top:6px">
-        ※昼休憩は固定 <b>12:30–13:30</b> として扱います（分数は上の「休憩（分）」）。外出と重なる場合の扱いは上のチェックで切替。
+        ※昼休憩は固定 <b>12:30–13:30</b>（分数は上の「休憩（分）」）。外出重複時の扱いは上のチェックで切替。<br>
+        ※平均は「<b>稼働日</b>のみを分母」にします（稼働が無い日は除外）。
       </div>
     </div>
   </div>
@@ -168,7 +125,7 @@
         </div>
 
         <div class="card card--flush">
-          <h2>当月の平均残業時間の推移（h/日）</h2>
+          <h2>当月の平均残業時間の推移（h/稼働日）</h2>
           <div class="chartWrap"><canvas id="chartMonthAvg"></canvas></div>
         </div>
 
@@ -187,7 +144,7 @@
         </div>
 
         <div class="card card--flush">
-          <h2>今年度の各月の平均残業時間（h/日）</h2>
+          <h2>今年度の各月の平均残業時間（h/稼働日）</h2>
           <div class="chartWrap"><canvas id="chartFYAvg"></canvas></div>
         </div>
       </div>
@@ -267,12 +224,14 @@
   function computeOvertimeMinutes(records, stdHoursPerDay=8, breakMin=60, lunchOverlapExtra=true){
     const STD_MIN=Math.round(stdHoursPerDay*60);
     const NO_OUT='1999/01/01 00:00';
-    const byDate=new Map();
+    const byDate=new Map(); // 'YYYY/MM/DD' -> overtime minutes (may be negative)
+
     for(const r of records){
       const start=parseDate(r.start), end=parseDate(r.end);
       if(!start||!end||end<=start) continue;
 
       const baseMin=(end-start)/60000;
+
       let outMin=0, outStart=null, outEnd=null;
       const hasOut=r.start_out && r.end_out && r.start_out!==NO_OUT && r.end_out!==NO_OUT;
       if(hasOut){
@@ -306,24 +265,75 @@
     }
     return {labels,data,last};
   }
-  function buildMonthlyPace(last,targetH){ const step=targetH/last, ar=[]; for(let i=1;i<=last;i++){ ar.push(to2(step*i)); } return ar; }
-  function buildMonthlyRunningAvg(monthCum){ const labels=[...monthCum.labels]; const data=monthCum.data.map((cum,i)=>to2(cum/(i+1))); return {labels,data}; }
-  function buildMonthlyDailyHours(byDate,y,m){ const last=daysInMonth(y,m), labels=[], data=[]; for(let d=1; d<=last; d++){ const key=`${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`; labels.push(String(d)); data.push(to2((byDate.get(key)||0)/60)); } return {labels,data}; }
+
+  /** 当月：ランニング平均（h/稼働日）
+   *  - 分母：その日までの「稼働日」数（byDate にキーがある日。残業0/負でも稼働扱い）
+   *  - 分子：その日までの累積残業（h）
+   *  - 稼働が無い日は平均値を据え置き（0のまま）
+   */
+  function buildMonthlyRunningAvgWorked(byDate, y, m, monthCum){
+    const last=daysInMonth(y,m);
+    const labels=[...monthCum.labels];
+    const data=[];
+    let workedDays = 0;
+
+    for(let d=1; d<=last; d++){
+      const key=`${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`;
+      if(byDate.has(key)){ workedDays += 1; }
+      const cumH = monthCum.data[d-1]; // 当日までの累積(h)
+      const avg  = workedDays>0 ? to2(cumH / workedDays) : 0;
+      data.push(avg);
+    }
+    return {labels, data};
+  }
+
+  /** 当月：各日の残業時間（h） */
+  function buildMonthlyDailyHours(byDate,y,m){
+    const last=daysInMonth(y,m), labels=[], data=[];
+    for(let d=1; d<=last; d++){
+      const key=`${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`;
+      labels.push(String(d));
+      data.push(to2((byDate.get(key)||0)/60));
+    }
+    return {labels,data};
+  }
+
   function buildFiscalYearCumulative(byDate, fyStartMonth, refDate){
     const refY=refDate.getFullYear(), refM=refDate.getMonth()+1; let fyStartYear=(refM<fyStartMonth)?refY-1:refY;
     const months=[]; for(let i=0;i<12;i++){ let m=fyStartMonth+i, y=fyStartYear; if(m>12){m-=12;y++;} months.push({y,m}); }
     const labels=months.map(({y,m})=>`${y}/${String(m).padStart(2,'0')}`); const data=[]; let cum=0;
-    for(const {y,m} of months){ const last=daysInMonth(y,m); let min=0; for(let d=1; d<=last; d++){ const key=`${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`; min += (byDate.get(key)||0);} cum += min/60; data.push(to2(cum)); }
+    for(const {y,m} of months){
+      const last=daysInMonth(y,m); let min=0;
+      for(let d=1; d<=last; d++){
+        const key=`${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`;
+        min += (byDate.get(key)||0);
+      }
+      cum += min/60; data.push(to2(cum));
+    }
     return {labels,data,months};
   }
-  function buildFiscalYearMonthlyAvg(byDate, monthsList){
+
+  /** 今年度：各月の平均（h/稼働日）
+   *  - 分母：その月の「稼働日」数（byDate にキーがある日）
+   *  - 分子：その月の総残業（h）
+   *  - 稼働日が0の月は 0 を返す
+   */
+  function buildFiscalYearMonthlyAvgWorked(byDate, monthsList){
     const labels=monthsList.map(({y,m})=>`${y}/${String(m).padStart(2,'0')}`);
     const data=monthsList.map(({y,m})=>{
-      const last=daysInMonth(y,m); let min=0; for(let d=1; d<=last; d++){ const key=`${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`; min+=(byDate.get(key)||0); }
-      return to2((min/60)/last);
+      const last=daysInMonth(y,m);
+      let min=0, worked=0;
+      for(let d=1; d<=last; d++){
+        const key=`${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`;
+        if(byDate.has(key)) worked += 1;
+        min += (byDate.get(key)||0);
+      }
+      return worked>0 ? to2((min/60)/worked) : 0;
     });
     return {labels,data};
   }
+
+  function buildMonthlyPace(last,targetH){ const step=targetH/last, ar=[]; for(let i=1;i<=last;i++){ ar.push(to2(step*i)); } return ar; }
   function buildFiscalYearPace360(len){ const step=360/len, ar=[]; for(let i=1;i<=len;i++){ ar.push(to2(step*i)); } return ar; }
 
   /* ========= 補助 ========= */
@@ -357,16 +367,16 @@
       }
     });
 
-    // 当月 平均
+    // 当月 平均（h/稼働日）
     const mAvgScale=computeYMinMax(monthAvg,1);
     if(chartMonthAvg) chartMonthAvg.destroy();
     chartMonthAvg=new Chart(els.chartMonthAvg.getContext('2d'), {
       type:'line',
-      data:{ labels:monthLabels, datasets:[{label:'当月 平均（h/日）', data:monthAvg, borderWidth:2, borderColor:'#7cc0ff', backgroundColor:'#7cc0ff', tension:0.2, pointRadius:2}]},
+      data:{ labels:monthLabels, datasets:[{label:'当月 平均（h/稼働日）', data:monthAvg, borderWidth:2, borderColor:'#7cc0ff', backgroundColor:'#7cc0ff', tension:0.2, pointRadius:2}]},
       options:{ responsive:true, maintainAspectRatio:false, resizeDelay:150,
-        scales:{ y:{ beginAtZero:false, suggestedMin:mAvgScale.suggestedMin, suggestedMax:mAvgScale.suggestedMax, ticks:{color:'#a9b5c1', callback:v=>v+' h/日'}, grid:{color:'#243141'}},
+        scales:{ y:{ beginAtZero:false, suggestedMin:mAvgScale.suggestedMin, suggestedMax:mAvgScale.suggestedMax, ticks:{color:'#a9b5c1', callback:v=>v+' h/稼働日'}, grid:{color:'#243141'}},
                  x:{ ticks:{color:'#a9b5c1'}, grid:{color:'#1a2330'}}},
-        plugins:{ legend:{labels:{color:'#a9b5c1'}}, tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y} h/日`}} }
+        plugins:{ legend:{labels:{color:'#a9b5c1'}}, tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y} h/稼働日`}} }
       }
     });
 
@@ -400,24 +410,21 @@
       }
     });
 
-    // 今年度 平均
+    // 今年度 平均（h/稼働日）
     const fyAvgScale=computeYMinMax(fyAvgData,1);
     if(chartFYAvg) chartFYAvg.destroy();
     chartFYAvg=new Chart(els.chartFYAvg.getContext('2d'), {
       type:'line',
-      data:{ labels:fyAvgLabels, datasets:[{label:'各月の平均（h/日）', data:fyAvgData, borderWidth:2, borderColor:'#9dffa4', backgroundColor:'#9dffa4', tension:0.2, pointRadius:2}]},
+      data:{ labels:fyAvgLabels, datasets:[{label:'各月の平均（h/稼働日）', data:fyAvgData, borderWidth:2, borderColor:'#9dffa4', backgroundColor:'#9dffa4', tension:0.2, pointRadius:2}]},
       options:{ responsive:true, maintainAspectRatio:false, resizeDelay:150,
-        scales:{ y:{ beginAtZero:false, suggestedMin:fyAvgScale.suggestedMin, suggestedMax:fyAvgScale.suggestedMax, ticks:{color:'#a9b5c1', callback:v=>v+' h/日'}, grid:{color:'#243141'}},
+        scales:{ y:{ beginAtZero:false, suggestedMin:fyAvgScale.suggestedMin, suggestedMax:fyAvgScale.suggestedMax, ticks:{color:'#a9b5c1', callback:v=>v+' h/稼働日'}, grid:{color:'#243141'}},
                  x:{ ticks:{color:'#a9b5c1'}, grid:{color:'#1a2330'}}},
-        plugins:{ legend:{labels:{color:'#a9b5c1'}}, tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y} h/日`}} }
+        plugins:{ legend:{labels:{color:'#a9b5c1'}}, tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y} h/稼働日`}} }
       }
     });
   }
 
   /* ========= 再計算 ========= */
-  function filterByUser(all, name){ return all.filter(r=>getUserFromTitle(r.title)===name); }
-  function latestStartDate(records){ let max=null; for(const r of records){ const d=parseDate(r.start); if(d && (!max||d>max)) max=d; } return max; }
-
   function recalc(){
     const stdHours=parseFloat(els.stdHours.value)||8;
     const breakMin=parseInt(els.breakMin.value)||60;
@@ -428,21 +435,25 @@
     const userRecords=filterByUser(rawData, user);
     const byDate=computeOvertimeMinutes(userRecords, stdHours, breakMin, lunchExtra);
 
+    // 表示月決定
     let y,m; const mv=els.monthPicker.value;
     if(mv){ const [yy,mm]=mv.split('-').map(n=>parseInt(n)); y=yy; m=mm; }
     else { const base=latestStartDate(userRecords)||new Date(); y=base.getFullYear(); m=base.getMonth()+1; els.monthPicker.value=`${y}-${String(m).padStart(2,'0')}`; }
 
+    // 当月
     const monthCumObj=buildMonthlyCumulative(byDate,y,m);
     const monthPace20=buildMonthlyPace(monthCumObj.last,20);
     const monthPace40=buildMonthlyPace(monthCumObj.last,40);
-    const monthAvgObj=buildMonthlyRunningAvg(monthCumObj);
-    const monthDaily=buildMonthlyDailyHours(byDate,y,m);
+    const monthAvgObj=buildMonthlyRunningAvgWorked(byDate, y, m, monthCumObj); // ← 稼働日のみ
+    const monthDaily =buildMonthlyDailyHours(byDate,y,m);
 
+    // 今年度
     const refDate=latestStartDate(userRecords)||new Date();
     const fyCumObj=buildFiscalYearCumulative(byDate,fyStart,refDate);
-    const fyAvgObj=buildFiscalYearMonthlyAvg(byDate,fyCumObj.months);
+    const fyAvgObj=buildFiscalYearMonthlyAvgWorked(byDate,fyCumObj.months);   // ← 稼働日のみ
     const fyPace360=buildFiscalYearPace360(fyCumObj.labels.length);
 
+    // KPI
     const monthTotal=monthCumObj.data.at(-1)||0;
     const fyTotal=fyCumObj.data.at(-1)||0;
     els.kpiMonth.textContent=`当月残業 合計: ${monthTotal.toFixed(2)} h`;
@@ -455,12 +466,12 @@
       monthLabels: monthCumObj.labels,
       monthCum: monthCumObj.data,
       monthPace20, monthPace40,
-      monthAvg: monthAvgObj.data,
+      monthAvg: monthAvgObj.data,     // 稼働日平均
       monthDaily: monthDaily.data,
       fyLabels: fyCumObj.labels,
       fyCum: fyCumObj.data,
       fyAvgLabels: fyAvgObj.labels,
-      fyAvgData: fyAvgObj.data,
+      fyAvgData: fyAvgObj.data,       // 稼働日平均
       fyPace360
     });
   }
