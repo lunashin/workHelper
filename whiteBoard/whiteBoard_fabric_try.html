@@ -1,0 +1,835 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>Fabric.js 図形作成ツール（線プレビュー対応）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --fg:#0f172a;
+      --line:#3a3c44;
+    }
+    html,body{
+      height:100%;
+      margin:0;
+      color:var(--fg);
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,"ヒラギノ角ゴ ProN",Meiryo,sans-serif;
+    }
+    header{
+      padding:10px 14px;
+      border-bottom:1px solid var(--line);
+      display:flex;
+      gap:18px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .kbd{
+      padding:.2em .45em;
+      border:1px solid var(--line);
+      border-bottom-width:2px;
+      border-radius:6px;
+      font-weight:600;
+      background:#f2f3f5;
+    }
+    #wrap{
+      height:calc(100% - 56px);
+    }
+    /* 背景は CSS で塗らない（Fabric で制御するため） */
+    canvas{
+      display:block;
+      outline:none;
+    }
+  </style>
+</head>
+<body>
+  <header id="header">
+    <div>
+      <span class="kbd">c</span> 円 /
+      <span class="kbd">s</span> 四角 /
+      <span class="kbd">a</span> 矢印 /
+      <span class="kbd">t</span> テキスト /
+      <span class="kbd">l</span> 線：始点確定 → プレビュー表示 → クリックで終点確定
+    </div>
+    <div>ダブルクリックでテキスト編集（prompt）／ドラッグで移動</div>
+  </header>
+  <div id="wrap">
+    <canvas id="stage" tabindex="0" aria-label="図形キャンバス"></canvas>
+  </div>
+
+  <!-- 指定の CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/671/index.min.js"></script>
+  <script>
+  (function(){
+    /** @type {HTMLCanvasElement} キャンバスDOM要素 */
+    const canvasEl = document.getElementById('stage');
+
+    /** @type {HTMLElement} ヘッダー（高さ分だけキャンバス高さを減算） */
+    const headerEl = document.getElementById('header');
+
+    /** @type {fabric.Canvas} Fabric キャンバス本体 */
+    const canvas = new fabric.Canvas(canvasEl, {
+      backgroundColor: '#ffffff',     // デバッグしやすい白
+      selection: true,
+      preserveObjectStacking: true
+    });
+
+    /**
+     * 画面サイズに合わせて Fabric キャンバスのサイズを調整する。
+     * ヘッダーの高さを差し引いて、残りの高さをキャンバスに割り当てる。
+     *
+     * @returns {void}
+     */
+    function resizeCanvasToViewport(){
+      // 画面幅・高さの取得
+      const viewportWidth  = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+
+      // ヘッダーの高さを算出（小数を切り上げ）
+      const headerHeight = Math.ceil(
+        headerEl.getBoundingClientRect().height
+      );
+
+      // キャンバスへピクセルサイズを適用
+      canvas.setWidth(viewportWidth);
+      canvas.setHeight(viewportHeight - headerHeight);
+
+      // クリック判定などの内部オフセットを再計算
+      canvas.calcOffset();
+
+      // 即時描画
+      canvas.renderAll();
+    }
+
+    // 初期リサイズと、リサイズイベント監視
+    window.addEventListener('resize', resizeCanvasToViewport, { passive:true });
+    resizeCanvasToViewport();
+
+    /** @type {{x:number,y:number}|null} 直近に取得したマウスポインタのキャンバス座標 */
+    let lastPointer = null;
+
+    /**
+     * 図形配置用の基準座標（左上座標）を取得する。
+     * マウスが未移動などで座標が未取得の場合はキャンバス中央を返す。
+     *
+     * @returns {{x:number,y:number}} 左上配置に使うキャンバス座標
+     */
+    function getDropPoint(){
+      if (lastPointer) {
+        return lastPointer;
+      }
+      return {
+        x: canvas.getWidth() / 2,
+        y: canvas.getHeight() / 2
+      };
+    }
+
+    /**
+     * 選択オブジェクト（単体 or グループ）を取得
+     * @returns {fabric.Object|null}
+     */
+    function getActiveObject(){
+      const active = canvas.getActiveObject();
+      return active || null;
+    }
+
+    /**
+     * オブジェクトを dx,dy だけ移動（整数ピクセル）
+     * @param {fabric.Object} obj
+     * @param {number} dx
+     * @param {number} dy
+     * @returns {void}
+     */
+    function nudgeObject(obj, dx, dy){
+      obj.set({
+        left: (obj.left || 0) + dx,
+        top:  (obj.top  || 0) + dy
+      });
+      obj.setCoords();
+      canvas.renderAll();
+    }
+
+    /**
+     * オブジェクトを複製して少しずらして配置
+     * @param {fabric.Object} obj
+     * @returns {void}
+     */
+    function duplicateObject(obj){
+      obj.clone((clone) => {
+        clone.set({
+          left: (obj.left || 0) + 16,
+          top:  (obj.top  || 0) + 16
+        });
+        canvas.add(clone);
+        canvas.setActiveObject(clone);
+        canvas.renderAll();
+      });
+    }
+
+    /**
+     * オブジェクトを回転（deg 度）。Shift 押しで逆回転などは呼び出し側で調整。
+     * @param {fabric.Object} obj
+     * @param {number} deg
+     * @returns {void}
+     */
+    function rotateObject(obj, deg){
+      const cur = obj.angle || 0;
+      obj.rotate(cur + deg);
+      obj.setCoords();
+      canvas.renderAll();
+    }
+
+    /** @type {fabric.IGroupOptions} グループ化時の共通オプション */
+    const groupOptions = {
+      hasControls: true,
+      hoverCursor: 'move',
+      originX: 'left',
+      originY: 'top'
+    };
+
+    /**
+     * 図形（複数可）に中央ラベル（初期は空文字）を重ねたグループを生成し、キャンバスへ追加する。
+     * ラベル位置は必ず「グループ内ローカル座標の中央」に配置し、後からの編集でも中央に維持される。
+     *
+     * @param {fabric.Object[]} baseObjects - 図形オブジェクトの配列（Rect/Circle/Line/Triangle など）
+     * @returns {fabric.Group} 追加されたグループオブジェクト
+     */
+    function createLabeledGroup(baseObjects){
+      // 追加位置（左上）を確定
+      const dropPoint = getDropPoint();
+
+      // ラベル（初期テキストは空、中央揃え）
+      const labelText = new fabric.Text('', {
+        fontSize: 16,
+        fill: '#0f172a',
+        originX: 'center',
+        originY: 'center',
+        left: 0,                 // 後で中央へ再配置
+        top:  0,
+        textAlign: 'center'
+      });
+
+      // グループを作成（図形 + ラベル）
+      const group = new fabric.Group(
+        [...baseObjects, labelText],
+        {
+          ...groupOptions,
+          left: dropPoint.x,
+          top:  dropPoint.y
+        }
+      );
+
+      // ラベル参照を保持（ダブルクリック編集時に使用）
+      group._label = labelText;
+
+      // キャンバスに追加
+      canvas.add(group);
+
+      // グループの「ローカル幅・高さ」を用いてラベルの中央を計算
+      labelText.set({
+        text: "Text",
+        // left: group.width / 2,
+        // top:  group.height / 2,
+        left: 0,
+        top:  0, 
+        originX: 'center',
+        originY: 'center',
+        textAlign: 'center'
+      });
+
+      // 最前面へ（Fabric 1/2 系は Canvas メソッド）
+      if (canvas.bringToFront) {
+        canvas.bringToFront(group);
+      }
+
+      // 追加直後に選択状態へ
+      canvas.setActiveObject(group);
+
+      // クリック判定境界などを再計算
+      group.setCoords();
+
+      // 即時描画
+      canvas.renderAll();
+
+      return group;
+    }
+
+    /**
+     * 円を追加する（初期テキストは空、中央ラベルを持つグループとして追加）。
+     *
+     * @returns {void}
+     */
+    function addCircle(){
+      const radius = 60;
+
+      /** @type {fabric.Circle} */
+      const circle = new fabric.Circle({
+        left: 0,
+        top:  0,
+        radius: radius,
+        fill: '#22c55e',
+        stroke: '#052e16',
+        strokeWidth: 3,
+        strokeUniform: true
+      });
+
+      createLabeledGroup([circle]);
+    }
+
+    /**
+     * 四角形を追加する（初期テキストは空、中央ラベルを持つグループとして追加）。
+     *
+     * @returns {void}
+     */
+    function addRect(){
+      const width  = 150;
+      const height = 100;
+
+      /** @type {fabric.Rect} */
+      const rect = new fabric.Rect({
+        left: 0,
+        top:  0,
+        width:  width,
+        height: height,
+        rx: 8,
+        ry: 8,
+        fill: '#60a5fa',
+        stroke: '#0a2472',
+        strokeWidth: 3,
+        strokeUniform: true
+      });
+
+      createLabeledGroup([rect]);
+    }
+
+    /**
+     * テキストボックス（背景付き矩形）を追加する（初期テキストは空、中央ラベル）。
+     *
+     * @returns {void}
+     */
+    function addTextBox(){
+      const width  = 200;
+      const height = 80;
+
+      /** @type {fabric.Rect} */
+      const box = new fabric.Rect({
+        left: 0,
+        top:  0,
+        width:  width,
+        height: height,
+        rx: 10,
+        ry: 10,
+        fill: '#f59e0b',
+        stroke: '#7a3d00',
+        strokeWidth: 3,
+        strokeUniform: true
+      });
+
+      createLabeledGroup([box]);
+    }
+
+    /**
+     * 右向き矢印を追加する（不可視の外枠 + 線 + 三角形ヘッドのグループ、初期テキストは空）。
+     *
+     * @returns {void}
+     */
+    function addArrow(){
+      // 幾何パラメータ
+      const padding   = 10;
+      const bodyY     = 30;
+      const lineLen   = 140;
+      const headSize  = 16;
+      const groupW    = padding + lineLen + headSize + padding;
+      const groupH    = 60;
+
+      /** @type {fabric.Rect} 枠（バウンディングを安定させる不可視矩形） */
+      const phantomBounds = new fabric.Rect({
+        left: 0,
+        top:  0,
+        width:  groupW,
+        height: groupH,
+        fill: 'rgba(0,0,0,0)',
+        selectable: false,
+        evented: false
+      });
+
+      /** @type {fabric.Line} 矢印の軸線 */
+      const shaftLine = new fabric.Line(
+        [padding, bodyY, padding + lineLen, bodyY],
+        {
+          stroke: '#f43f5e',
+          strokeWidth: 5
+        }
+      );
+
+      /** @type {fabric.Triangle} 矢印ヘッド（三角形） */
+      const arrowHead = new fabric.Triangle({
+        left:  padding + lineLen,
+        top:   bodyY - headSize / 2,
+        width: headSize,
+        height: headSize,
+        angle: 90,                  // 右向き相当
+        fill: '#f43f5e',
+        stroke: '#7a1020',
+        strokeWidth: 2,
+        originX: 'left',
+        originY: 'top'
+      });
+
+      createLabeledGroup([phantomBounds, shaftLine, arrowHead]);
+    }
+
+    /**
+     * 指定図形をグルーピング
+     */
+    function addGroup(objects) {
+      // 追加位置（左上）を確定
+      const dropPoint = getDropPoint();
+
+      // グループを作成（図形 + ラベル）
+      const group = new fabric.Group(
+        [...objects],
+        {
+          ...groupOptions,
+          // left: dropPoint.x,
+          // top:  dropPoint.y
+        }
+      );
+      // キャンバスに追加
+      canvas.add(group);
+       // 追加直後に選択状態へ
+      canvas.setActiveObject(group);
+      // クリック判定境界などを再計算
+      group.setCoords();
+      // 即時描画
+      canvas.renderAll();
+
+      return group;
+    }
+
+    /**
+     * ダブルクリックでグループの中央ラベルを編集する。
+     * ラベルは編集後もグループ内中央に再配置し、中央揃えを維持する。
+     *
+     * @param {fabric.Object} targetObject - ダブルクリックでヒットした Fabric オブジェクト
+     * @returns {void}
+     */
+    function editLabelByDblClick(targetObject){
+      if (!targetObject) return;
+
+      // グループ以外をダブルクリックした場合、親グループを辿る
+      /** @type {fabric.Group | undefined} */
+      const group = (targetObject.type === 'group')
+        ? /** @type {fabric.Group} */ (targetObject)
+        : /** @type {fabric.Group | undefined} */ (targetObject.group);
+
+      if (!group || !group._label) return;
+
+      /** @type {fabric.Text} */
+      const labelText = group._label;
+
+      // 既存テキストを初期値として prompt
+      const currentText = labelText.text || '';
+      const nextText = window.prompt('図形のテキストを入力してください：', currentText);
+      if (nextText === null) return;  // キャンセル
+
+      // 新しいテキストを設定（中央揃えを維持）
+      labelText.set({
+        text: nextText,
+        textAlign: 'center',
+        originX: 'center',
+        originY: 'center'
+      });
+
+      // グループ内ローカル座標の中央へ再配置
+      // labelText.set({
+      //   left: group.width / 2,
+      //   top:  group.height / 2
+      // });
+
+      // クリック判定境界を更新し、描画
+      group.setCoords();
+      canvas.renderAll();
+    }
+
+    // ===== ここから：線描画（lキー → プレビュー表示 → 次クリックで終点確定） =====
+
+    /** @type {{x:number,y:number}|null} 線描画の始点（lキー押下時に確定） */
+    let pendingLineStart = null;
+
+    /** @type {fabric.Line|null} プレビュー用の線（始点確定後～終点クリックまで表示） */
+    let previewLine = null;
+    let previeLinearrowHead = null;
+
+    /**
+     * 線描画の始点を記録し、プレビュー線を作成する（lキー押下時）。
+     * マウス位置が未取得の場合はキャンバス中央を使用する。
+     *
+     * @returns {void}
+     */
+    function startLineDrawing(){
+      // マウスカーソル位置（未取得なら中央）を始点として記録
+      const start = getDropPoint();
+      pendingLineStart = { x: start.x, y: start.y };
+
+      // 既存のプレビュー線があれば除去（多重作成防止）
+      if (previewLine) {
+        canvas.remove(previewLine);
+        previewLine = null;
+      }
+      if (previeLinearrowHead) {
+        canvas.remove(previeLinearrowHead);
+        previeLinearrowHead = null;
+      }
+
+      // プレビュー線を作成（終点はとりあえず始点と同じ、ダッシュ＆半透明）
+      previewLine = new fabric.Line(
+        [start.x, start.y, start.x, start.y],
+        {
+          stroke: '#111827',
+          strokeWidth: 2,
+          strokeLineCap: 'round',
+          opacity: 0.6,
+          selectable: false,
+          evented: false,
+          strokeDashArray: [6, 6]  // 点線でプレビューと分かるように
+        }
+      );
+
+      // 矢印描画
+      // 幾何パラメータ
+      const padding   = 10;
+      const bodyY     = 30;
+      const lineLen   = 140;
+      const headSize  = 32;
+      const groupW    = padding + lineLen + headSize + padding;
+      const groupH    = 60;
+
+      /** @type {fabric.Triangle} 矢印ヘッド（三角形） */
+      previeLinearrowHead = new fabric.Triangle({
+        left:  padding + lineLen,
+        top:   bodyY - headSize / 2,
+        width: headSize,
+        height: headSize,
+        angle: 0,                  // 右向き相当
+        fill: 'black',
+        stroke: 'black',
+        strokeWidth: 2,
+        originX: 'center',
+        originY: 'center'
+      });
+      previeLinearrowHead.set({left: start.x, top: start.y});
+
+      // キャンバスに追加して前面へ
+      canvas.add(previewLine, previeLinearrowHead);
+      if (canvas.bringToFront) canvas.bringToFront(previewLine);
+      canvas.renderAll();
+    }
+
+    /**
+     * プレビュー線が存在し、始点が待機中であれば、現在のマウス位置に合わせて
+     * プレビュー線の終点を更新する。
+     *
+     * @returns {void}
+     */
+    function updateLinePreviewIfNeeded(){
+      if (!pendingLineStart) return;
+      if (!previewLine) {
+        // 念のため始点だけでもプレビューを作る（理想的には startLineDrawing 内で済む）
+        startLineDrawing();
+        return;
+      }
+      // 現在のマウス位置（lastPointer が想定上は常にあるが、なければ中央）
+      const pos = getDropPoint();
+
+      // x2 / y2 を現在位置へ更新
+      previewLine.set({ x2: pos.x, y2: pos.y });
+
+      // 矢印描画
+      previeLinearrowHead.set({ left:pos.x, top:pos.y });
+
+      // 矢印角度計算
+      let x1 = previewLine.x1;
+      let y1 = previewLine.y1;
+      let x2 = pos.x;
+      let y2 = pos.y;
+      let verticalHeight = Math.abs(y2-y1);
+      let horizontalHeight = Math.abs(x2-x1);
+      let tanRatio = verticalHeight / horizontalHeight;
+      let basicAngle = Math.atan(tanRatio) * 180 / Math.PI + 90;
+      let adjustedAngle = basicAngle;
+      if (x2 > x1) {
+        // 右領域
+        if (y2 < y1) {
+          // 右下領域
+          adjustedAngle = -basicAngle - 180;
+        } else if (y2 === y1) {
+          // 真右
+          adjustedAngle = -basicAngle - 90;
+        } else if (y2 > y1) {
+          // 右上領域
+          adjustedAngle = basicAngle;
+        }
+      } else if (x2 < x1) {
+        // 左領域
+        if (y2 > y1) {
+          // 左上領域
+          adjustedAngle = -basicAngle;
+        } else if (y2 === y1) {
+          // 真左
+          adjustedAngle = 270;
+        } else if (y2 < y1) {
+          // 左下領域
+          adjustedAngle = basicAngle - 180;
+        }
+      }
+      console.log(adjustedAngle);
+      previeLinearrowHead.set({ angle: adjustedAngle});
+
+      // 変形・再描画
+      previewLine.setCoords();
+      previeLinearrowHead.setCoords();
+      canvas.renderAll();
+    }
+
+    /**
+     * 線描画が待機中であれば、クリック位置を終点として線オブジェクトを確定追加する。
+     * プレビュー線は削除し、待機状態をクリアする。
+     *
+     * @param {MouseEvent} domEvent - DOMのマウスイベント（Fabricの mouse:down から受け取る）
+     * @returns {boolean} true: 線を確定した（既定の背景クリック処理はスキップすべき） / false: 何もしなかった
+     */
+    function finalizeLineDrawingIfNeeded(domEvent){
+      // 始点待機中でなければ何もしない
+      if (!pendingLineStart) return false;
+
+      // クリック位置（終点）を取得
+      const pointer = canvas.getPointer(domEvent);
+      const endX = pointer.x;
+      const endY = pointer.y;
+
+      // 確定線を作成（プレビューより濃く・太く）
+      /** @type {fabric.Line} */
+      const line = new fabric.Line(
+        [pendingLineStart.x, pendingLineStart.y, endX, endY],
+        {
+          stroke: '#111827',
+          strokeWidth: 3,
+          strokeLineCap: 'round',
+          selectable: true
+        }
+      );
+
+      // キャンバスに追加して選択
+      canvas.add(line);
+      addGroup([line, previeLinearrowHead]);
+      canvas.setActiveObject(line);
+
+      // プレビュー線があれば削除
+      cancelLinePreview(true);
+
+      // 背景クリックの既定処理（選択解除）はスキップしたいので true を返す
+      return true;
+    }
+
+    /**
+     * プレビュー線を削除し、待機状態をクリアする。
+     */
+    function cancelLinePreview(is_render) {
+      // プレビュー線があれば削除
+      if (previewLine) {
+        canvas.remove(previewLine);
+        previewLine = null;
+      }
+
+      // 状態クリア
+      pendingLineStart = null;
+
+      // 再描画
+      if (is_render) {
+          canvas.renderAll();
+      }
+    }
+
+
+
+
+    // ===== イベントハンドラ登録 =====
+
+    // ダブルクリック：上位キャンバス（DOM）で 1 本に統一（多重発火防止）
+    canvas.upperCanvasEl.addEventListener('dblclick', (domEvent) => {
+      // クリック位置で Fabric オブジェクトを特定
+      const targetObject = canvas.findTarget(domEvent, true);
+      if (!targetObject) return;
+
+      editLabelByDblClick(targetObject);
+    });
+
+    // ダブルクリック：上位キャンバス（DOM）で 1 本に統一（多重発火防止）
+    canvas.upperCanvasEl.addEventListener('keydown', (domEvent) => {
+      console.log("upperCanvasEl.addEventListener: keydown")
+      // クリック位置で Fabric オブジェクトを特定
+      const targetObject = canvas.findTarget(domEvent, true);
+      if (!targetObject) return;
+
+      // editLabelByDblClick(targetObject);
+    });
+
+    // マウス移動時にキャンバス座標を更新（配置時に使用）
+    canvas.on('mouse:move', (evt) => {
+      const pointer = canvas.getPointer(evt.e);
+      lastPointer = { x: pointer.x, y: pointer.y };
+
+      // ★ 線プレビュー中なら、終点をマウス位置へ更新
+      updateLinePreviewIfNeeded();
+    });
+
+    // 背景クリックで選択解除（ただし線描画の終点確定中は優先して処理）
+    canvas.on('mouse:down', (evt) => {
+      // まずは線描画の終点確定を試みる
+      const finalized = finalizeLineDrawingIfNeeded(evt.e);
+      if (finalized) return; // 線を引いたときはここで終了（背景クリック処理は行わない）
+
+      // 通常の背景クリック：選択解除して再描画
+      if (!evt.target){
+        canvas.discardActiveObject();
+        canvas.renderAll();
+      }
+    });
+
+    // グループが縮放された直後に呼ばれる
+    canvas.on('object:scaling', (e) => {
+      const target = e.target;
+      if (!target || target.type !== 'group') return;
+
+      console.log('object:scaling');
+
+      // TODO: 一旦無効化
+      return;
+
+      // グループ内の Rect を見つける（最初にある矩形を想定）
+      const rectObj = target._objects.find(o => o.type === 'rect');
+      if (!rectObj) return;
+
+      // いまのスケール量を幅・高さへ焼き込む
+      const newW = rectObj.width  * target.scaleX;
+      const newH = rectObj.height * target.scaleY;
+
+      rectObj.set({ width: newW, height: newH });
+
+      // グループのスケールはリセット（見た目は同じ）
+      target.scaleX = 1;
+      target.scaleY = 1;
+
+      // ラベルを中央へ（念のため）
+      if (target._label) {
+        target._label.set({
+          left: target.width / 2,
+          top:  target.height / 2,
+          originX: 'center',
+          originY: 'center',
+          textAlign: 'center'
+        });
+      }
+
+      target.setCoords();
+      canvas.renderAll();
+    });
+
+
+
+
+
+
+    /**
+     * キー押下ハンドラ。
+     * - IME 変換中（isComposing）や長押し連続（repeat）は除外
+     * - 入力要素へフォーカス時は除外
+     * - 指定キーで図形を1つだけ配置（重複発火を避けるため window の keydown 1 本）
+     * - lキーで線描画の始点を確定し、プレビュー線の表示を開始
+     *
+     * @param {KeyboardEvent} ev
+     * @returns {void}
+     */
+    function handleKeydown(ev){
+      // 入力フォームにフォーカスしている場合は無視
+      const activeTag = (document.activeElement && document.activeElement.tagName) || '';
+      const isTyping  = (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT');
+      if (isTyping) return;
+
+      // IME 確定前／キー長押しの連続発火を除外
+      if (ev.isComposing) return;
+      if (ev.repeat) return;
+
+      // key と code の両対応（IME中などで key が不安定な場合があるため）
+      const keyLower = (ev.key || '').toLowerCase();
+      const code     = ev.code || '';
+
+      const active = getActiveObject();
+
+      if (!active) {
+        // --- 既存の図形 ---
+        if (keyLower === 'c' || code === 'KeyC'){
+          ev.preventDefault();
+          addCircle();
+          return;
+        }
+        if (keyLower === 's' || code === 'KeyS'){
+          ev.preventDefault();
+          addRect();
+          return;
+        }
+        // if (keyLower === 'a' || code === 'KeyA'){
+        //   ev.preventDefault();
+        //   addArrow();
+        //   return;
+        // }
+        if (keyLower === 't' || code === 'KeyT'){
+          ev.preventDefault();
+          addTextBox();
+          return;
+        }
+  
+        // --- 線の描画開始（lキー：始点確定＋プレビュー開始） ---
+        if (keyLower === 'a' || code === 'KeyA'){
+          ev.preventDefault();
+          startLineDrawing();
+          return;
+        }
+        // --- 線の描画終了（Escキー：プレビュー終了） ---
+        if (keyLower === 'escape' || code === 'Escape'){
+          ev.preventDefault();
+          cancelLinePreview(true);
+          return;
+        }
+      } else {
+        // 削除：Delete / Backspace
+        if (keyLower === 'delete' || keyLower === 'backspace'){
+          ev.preventDefault();
+          canvas.remove(active);
+          canvas.discardActiveObject();
+          canvas.renderAll();
+          return;
+        }
+
+        // 複製：Ctrl/Cmd + D
+        if ((ev.ctrlKey || ev.metaKey) && (keyLower === 'd')){
+          ev.preventDefault();
+          duplicateObject(active);
+          return;
+        }
+      }
+    }
+
+    // キー入力は window の keydown を 1 本のみ登録（多重発火防止）
+    window.addEventListener('keydown', handleKeydown, true);
+
+    // クリックで常にキャンバスにフォーカス（キー取りこぼし対策）
+    document.addEventListener('pointerdown', () => {
+      canvasEl.focus({ preventScroll:true });
+    });
+    // 初回フォーカス
+    canvasEl.focus({ preventScroll:true });
+  })();
+  </script>
+</body>
+</html>
