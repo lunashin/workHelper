@@ -101,6 +101,7 @@
   <div id="toolbar" aria-label="保存スロットとエクスポート">
     <div id="slotButtons"></div>
     <div class="spacer"></div>
+    <button id="pngBtn"    class="toolbar-button" type="button" title="キャンバスをPNGで保存">PNG出力</button>
     <button id="importBtn" class="toolbar-button" type="button" title="JSONを現在のスロットにインポート">JSONインポート</button>
     <button id="exportBtn" class="toolbar-button" type="button" title="現在の状態をJSONでエクスポート">JSONエクスポート</button>
     <button id="clearBtn" class="toolbar-button"  type="button" title="現在のスロットをクリア">クリア</button>
@@ -133,6 +134,8 @@
     const importBtn = document.getElementById('importBtn');
     /** @type {HTMLButtonElement} */
     const clearBtn  = document.getElementById('clearBtn');
+    /** @type {HTMLButtonElement} */
+    const pngBtn    = document.getElementById('pngBtn');
 
     /** @type {fabric.Canvas} Fabric キャンバス本体 */
     const canvas = new fabric.Canvas(canvasEl, {
@@ -622,8 +625,10 @@
       });
       previewLineArrowHead = new fabric.Triangle({
         left:start.x, top:start.y, width:32, height:32, angle:0,
-        fill:'black', stroke:'black', strokeWidth:2, originX:'center', originY:'center',
+        // fill:'black', stroke:'black', strokeWidth:2, originX:'center', originY:'center',
+        fill:'#111827', stroke:'#111827', strokeWidth:2, originX:'center', originY:'center',
         selectable:false, evented:false
+        
       });
 
       canvas.add(previewLine, previewLineArrowHead);
@@ -654,22 +659,77 @@
       const p = canvas.getPointer(domEvent);
       const endX = p.x, endY = p.y;
 
-      const line = new fabric.Line([pendingLineStart.x, pendingLineStart.y, endX, endY],{
-        stroke:'#111827', strokeWidth:3, strokeLineCap:'round', selectable:true
+      // const line = new fabric.Line([pendingLineStart.x, pendingLineStart.y, endX, endY],{
+      //   stroke:'#111827', strokeWidth:3, strokeLineCap:'round', selectable:true
+      // });
+
+      // canvas.add(line);
+      // if (previewLineArrowHead){
+      //   addGroup([line, previewLineArrowHead]);
+      // }
+
+      // // プレビューを消して状態クリア
+      // if (previewLine){ canvas.remove(previewLine); previewLine = null; }
+      // previewLineArrowHead = null;
+      // pendingLineStart = null;
+
+      // canvas.renderAll();
+      // scheduleAutosave(); // 追加直後を保存
+      // return true;
+
+      // ---- ここから：相対座標で安定化した矢印グループを生成 ----
+      const x1 = pendingLineStart.x, y1 = pendingLineStart.y;
+      const x2 = endX,              y2 = endY;
+      const minX = Math.min(x1, x2);
+      const minY = Math.min(y1, y2);
+      const rel = (x, y) => ({ x: x - minX, y: y - minY });
+      const p1 = rel(x1, y1);
+      const p2 = rel(x2, y2);
+      // 軸線（相対座標）
+      const shaftLine = new fabric.Line([p1.x, p1.y, p2.x, p2.y], {
+        stroke: '#111827',
+        strokeWidth: 3,
+        strokeLineCap: 'round'
+      });
+      // 矢印ヘッド（三角形）：終点に配置、向きは atan2 から算出
+      const angleDeg = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+      const headSize = 32;
+      const arrowHead = new fabric.Triangle({
+        left:  p2.x,
+        top:   p2.y,
+        width: headSize,
+        height: headSize,
+        angle: angleDeg + 90,   // 先端が進行方向を向くよう 90°オフセット
+        fill:  '#111827',
+        stroke:'#111827',
+        strokeWidth: 2,
+        originX: 'center',
+        originY: 'center'
       });
 
-      canvas.add(line);
-      if (previewLineArrowHead){
-        addGroup([line, previewLineArrowHead]);
-      }
+      // 必要なら当たり判定を安定させる不可視の外枠（任意）
+      // const phantom = new fabric.Rect({ left:0, top:0, width:Math.abs(x2-x1), height:Math.abs(y2-y1),
+      //   fill:'rgba(0,0,0,0)', selectable:false, evented:false });
+
+      // 相対座標の子だけでグループを作成（グループ原点＝(minX, minY)）
+      const arrowGroup = new fabric.Group(
+        [shaftLine, arrowHead],   // phantom を入れるなら配列に追加
+        {
+          ...groupOptions,
+          left: minX,
+          top:  minY
+        }
+      );
+      canvas.add(arrowGroup);
+      canvas.setActiveObject(arrowGroup);
 
       // プレビューを消して状態クリア
       if (previewLine){ canvas.remove(previewLine); previewLine = null; }
-      previewLineArrowHead = null;
+      if (previewLineArrowHead){ canvas.remove(previewLineArrowHead); previewLineArrowHead = null; }
       pendingLineStart = null;
-
-      canvas.renderAll();
+      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
       scheduleAutosave(); // 追加直後を保存
+
       return true;
     }
 
@@ -798,6 +858,22 @@
       const dir = e.deltaY > 0 ? 1 : -1;  // 下回し=次 / 上回し=前
       selectSlot(currentSlot + dir);
     }, { passive: false });
+
+
+    // PNG出力：2倍解像度で書き出してダウンロード（倍率は好みに応じて調整可）
+    pngBtn.addEventListener('click', () => {
+      const dataURL = canvas.toDataURL({
+        format: 'png',
+        multiplier: 2,        // 2x 解像度
+        enableRetinaScaling: false
+      });
+      const a = document.createElement('a');
+      a.href = dataURL;
+      a.download = `canvas-slot${currentSlot+1}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    });
 
     // クリアボタン
     clearBtn.addEventListener('click', () => {
