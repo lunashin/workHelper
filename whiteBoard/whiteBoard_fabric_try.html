@@ -239,6 +239,8 @@
         if (obj.type === 'group' && obj._objects){
           const label = obj._objects.find(o => o.type === 'text');
           if (label) obj._label = label;
+          // 復元後に中央へ（スナップ）
+          if (obj._label) centerGroupLabel(obj);
         }
       }
     }
@@ -395,6 +397,53 @@
       objectCaching: false
     };
 
+    /**
+     * グループ内テキストラベル（group._label）を、図形グループの「見た目の中心」に再配置する。
+     * - getBoundingRect(true, true) でグループの外接矩形（キャンバス座標）を取得
+     * - その中心点を group.toLocalPoint(...) でローカル座標に変換して配置
+     * @param {fabric.Group} group
+     * @returns {void}
+     */
+    function centerGroupLabel(group){
+      if (!group || !group._label) return;
+
+      // グループの見た目の外接矩形（キャンバス座標）
+      const br = group.getBoundingRect(true, true);
+      const centerCanvas = new fabric.Point(
+        br.left + br.width / 2,
+        br.top  + br.height / 2
+      );
+
+      // キャンバス座標 → グループのローカル座標へ変換
+      // const centerLocal = group.toLocalPoint(centerCanvas, 'left', 'top');
+      // ★ v6 互換：キャンバス座標 → グループローカル座標を行列で求める
+      //   object->canvas 変換行列を逆行列にして、キャンバス点に適用
+      const m  = group.calcTransformMatrix();                  // Object -> Canvas
+      const im = fabric.util.invertTransform(m);               // Canvas -> Object
+      const centerLocal = fabric.util.transformPoint(centerCanvas, im);
+
+      // ラベルを中央へ（中央基準で配置）
+      group._label.set({
+        originX: 'center',
+        originY: 'center',
+        left: centerLocal.x,
+        top:  centerLocal.y,
+        textAlign: 'center'
+      });
+
+      // Debug
+      console.log('[DBG] label after', {
+        localX: centerLocal.x,
+        localY: centerLocal.y,
+        groupAngle: group.angle,
+        scaleX: group.scaleX, scaleY: group.scaleY
+      });
+
+      group.setCoords();
+
+      // Debug
+      console.log('[DBG] label after:', { left: group._label.left, top: group._label.top, originX: group._label.originX, originY: group._label.originY });
+    }
 
     /** 図形+ラベルのグループを作成して追加 */
     function createLabeledGroup(baseObjects){
@@ -423,8 +472,10 @@
       group._label = labelText;
       canvas.add(group);
 
-      // ※ ここはあなたの現状のロジックに合わせて必要なら中央化
-      labelText.set({ left: group.width/2, top: group.height/2 });
+      // // ※ ここはあなたの現状のロジックに合わせて必要なら中央化
+      // labelText.set({ left: group.width/2, top: group.height/2 });
+      // 見た目の中心に確実に配置（スケール・回転の影響を受けても中央）
+      centerGroupLabel(group);
 
       canvas.setActiveObject(group);
       group.setCoords();
@@ -514,6 +565,7 @@
       const group = (targetObject.type === 'group') ? targetObject : targetObject.group;
       const isTextOnly = (targetObject.type === 'textbox' || targetObject.type === 'text');
       let labelText = null;
+
       if (group){
         labelText = group._label || (group._objects ? group._objects.find(o=>o.type==='text') : null);
         if (!labelText) return;
@@ -527,10 +579,22 @@
       const nextText = window.prompt('図形のテキストを入力してください：', currentText);
       if (nextText === null) return;
 
-      labelText.set({ text: nextText, textAlign:'center', originX:'center', originY:'center' });
-      // ★グループのときは必ず中央に再配置（ローカル座標の中心）
+      // --- debug: 編集直前の各種座標 ---
       if (group){
-        labelText.set({ left: group.width/2, top: group.height/2 });
+        const br = group.getBoundingRect(true, true);
+        console.log('[DBG] group aabb (canvas):', br);
+        console.log('[DBG] group w/h/local:', group.width, group.height, 'angle=', group.angle, 'scale=', group.scaleX, group.scaleY);
+        console.log('[DBG] label before:', { left: labelText.left, top: labelText.top, originX: labelText.originX, originY: labelText.originY });
+      }
+
+      labelText.set({ text: nextText, textAlign:'center', originX:'center', originY:'center' });
+      // // ★グループのときは必ず中央に再配置（ローカル座標の中心）
+      // if (group){
+      //   labelText.set({ left: group.width/2, top: group.height/2 });
+      // }
+      // ★グループのときは見た目の中心に再配置（回転・拡大縮小後もずれない）
+      if (group){
+        centerGroupLabel(group);
       }
 
       (group || labelText).setCoords();
