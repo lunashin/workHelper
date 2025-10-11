@@ -152,6 +152,7 @@
     // ===== スロット機能 =====
     const SLOT_COUNT = 10;
     const LS_KEY_PREFIX = 'wb_slot_v1_';
+    const LS_KEY_META_PREFIX = 'wb_slot_v1_meta_';  // スロット毎の視点メタデータ保存用（ズーム/右上ワールド座標）
     let currentSlot = 0;
     let autosaveTimer = null;
 
@@ -183,6 +184,7 @@
       try{
         const key = LS_KEY_PREFIX + slot;
         localStorage.setItem(key, exportCanvasJSON());
+        saveViewportMeta(slot); // 視点メタも一緒に保存
         refreshSlotButtonsUI();
       }catch(err){ console.error('saveToSlot failed:', err); }
     }
@@ -194,7 +196,10 @@
         setCanvasBg('#ffffff');
         return;
       }
-      importCanvasJSON(json);
+      // importCanvasJSON(json);
+      importCanvasJSON(json, () => {
+        applyViewportFromMeta(slot);  // 視点メタを復元（あれば）
+      });
     }
     function setCanvasBg(color){
       canvas.backgroundColor = color;
@@ -208,6 +213,58 @@
         return (parsed.objects.length !== 0);
       }
       return false;
+    }
+
+    // ===== ビューポート保存/復元ユーティリティ =====
+    // 画面上の (screenX, screenY) に対応するワールド座標を取得
+    function getWorldPointAtScreen(screenX, screenY){
+      const vt = canvas.viewportTransform || [1,0,0,1,0,0];
+      const inv = fabric.util.invertTransform(vt);
+      const p = fabric.util.transformPoint(new fabric.Point(screenX, screenY), inv);
+      return { x: p.x, y: p.y };
+    }
+    // 現在のズームと「画面右上に来ているワールド座標」を保存
+    // options.touchUpdatedAt === false の時は updatedAt を変更しない
+    function saveViewportMeta(slot, { touchUpdatedAt = true } = {}){
+      try{
+        const zoom = canvas.getZoom();
+        const viewTR = getWorldPointAtScreen(canvas.getWidth(), 0); // 右上は (canvas.width, 0) のスクリーン座標
+        // 既存の updatedAt を引き継ぐ（touchUpdatedAt=false の場合）
+        let prevUpdated = null;
+        try {
+          const prevRaw = localStorage.getItem(LS_KEY_META_PREFIX + slot);
+          if (prevRaw) prevUpdated = (JSON.parse(prevRaw).updatedAt || null);
+        } catch(_){}
+        const updatedAt = touchUpdatedAt ? new Date().toISOString() : prevUpdated;
+        const meta = { zoom, viewTR, updatedAt };
+        localStorage.setItem(LS_KEY_META_PREFIX + slot, JSON.stringify(meta));
+      }catch(e){ console.warn('saveViewportMeta failed:', e); }
+    }
+    // 保存済みの視点メタを取得
+    function readViewportMeta(slot){
+      try{
+        const raw = localStorage.getItem(LS_KEY_META_PREFIX + slot);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed.zoom !== 'number' || !parsed.viewTR) return null;
+        return parsed;
+      }catch(e){ return null; }
+    }
+    // メタに基づき viewportTransform を再設定
+    function applyViewportFromMeta(slot){
+      const meta = readViewportMeta(slot);
+      if (!meta) return;
+      const z = meta.zoom;
+      if (!z || z <= 0) return;
+      const vx = meta.viewTR?.x ?? 0;
+      const vy = meta.viewTR?.y ?? 0;
+      // 右上 (screenW, 0) が (vx, vy) に一致するように並進を求める:
+      // [ z 0 0 z e f ] * [vx, vy, 1]^T のスクリーンX = screenW, Y = 0
+      // => e = screenW - z*vx, f = 0 - z*vy
+      const e = canvas.getWidth() - z * vx;
+      const f = 0 - z * vy;
+      canvas.setViewportTransform([ z, 0, 0, z, e, f ]);
+      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
     }
 
     function refreshSlotButtonsUI(){
@@ -229,7 +286,6 @@
       resetHistoryBaseline();
       canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
       canvasEl.focus({preventScroll:true});
-      scheduleAutosave();
     }
 
     function buildSlotButtons(){
@@ -276,7 +332,8 @@
     }
 
     // 変更イベント→自動保存 & 履歴
-    ['object:added','object:removed','object:modified','object:scaled','object:rotated','object:moved'].forEach(evt=>{
+    // ['object:added','object:removed','object:modified','object:scaled','object:rotated','object:moved'].forEach(evt=>{
+    ['object:modified','object:scaled','object:rotated','object:moved'].forEach(evt=>{
       canvas.on(evt, () => { scheduleAutosave(); pushHistoryDebounced(); });
     });
 
@@ -328,7 +385,7 @@
     }
 
     // ===== サムネプレビュー =====
-    const slotThumbCache = new Map(); // slotIndex -> dataURL
+    const slotThumbCache = new Map(); // cacheKey(slotIndex|updatedAt) -> dataURL
     let hoveredSlot = null;
     let lastHoverEvent = null;
     let shiftHeld = false;
@@ -337,7 +394,7 @@
     // スロットボタン上に表示するプレビューを消去
     function hideSlotPreview(){
       slotPreviewEl.style.display = 'none';
-      // 追加：古いサムネが残るのを防止
+      // 古いサムネが残るのを防止
       slotPreviewImg.removeAttribute('src');
     }
 
@@ -353,22 +410,8 @@
 
       const e = lastHoverEvent;
       if (e) positionSlotPreview(e);
-      slotPreviewCaption.textContent = `スロット ${hoveredSlot+1}`;
-
-      const cached = slotThumbCache.get(hoveredSlot);
-      if (cached){
-        slotPreviewImg.src = cached;
-        slotPreviewEl.style.display = 'block';
-        return;
-      }
-      const json = localStorage.getItem(LS_KEY_PREFIX + hoveredSlot);
-      if (!json){ hideSlotPreview(); return; }
-
-      generateThumbnailFromJSON(json, 280, 180).then((dataURL) => {
-        slotThumbCache.set(hoveredSlot, dataURL);
-        slotPreviewImg.src = dataURL;
-        slotPreviewEl.style.display = 'block';
-      }).catch(() => hideSlotPreview());
+      // 以降の表示は showSlotPreview に委譲（更新日入り）
+      showSlotPreview(hoveredSlot, e);
     }
 
     // Shiftの押下状態でプレビュー再評価（「あと押し」に対応）
@@ -389,21 +432,50 @@
       slotPreviewImg.removeAttribute('src'); // 古い残像を消す
       slotPreviewEl.style.display = 'block';
 
-      const cached = slotThumbCache.get(slotIndex);
+      // const cached = slotThumbCache.get(slotIndex);
+      // 保存データとメタ（更新日時）を取得
+      const json = localStorage.getItem(LS_KEY_PREFIX + slotIndex);
+      const metaRaw = localStorage.getItem(LS_KEY_META_PREFIX + slotIndex);
+      let updatedAt = null;
+      try { updatedAt = metaRaw ? (JSON.parse(metaRaw).updatedAt || null) : null; } catch(_){}
+      const cacheKey = `${slotIndex}|${updatedAt || 'none'}`;
+
+      const cached = slotThumbCache.get(cacheKey);
+
       if (cached){
         slotPreviewImg.src = cached;
         return; // 既に枠は表示済み
       }
-      const json = localStorage.getItem(LS_KEY_PREFIX + slotIndex);
+      // const json = localStorage.getItem(LS_KEY_PREFIX + slotIndex);
       if (!json){ hideSlotPreview(); return; }
 
-      generateThumbnailFromJSON(json, 280, 180).then((dataURL) => {
-        slotThumbCache.set(slotIndex, dataURL);
+      // ベースのサムネを生成後、更新日バッジを重ね描き
+      // generateThumbnailFromJSON(json, 280, 180).then((dataURL) => {
+      //   slotThumbCache.set(slotIndex, dataURL);
+      generateThumbnailWithUpdatedAt(json, updatedAt, 280, 180).then((dataURL) => {
+        slotThumbCache.set(cacheKey, dataURL);
         // すでに枠は出ているので src を付け替えるだけ
         slotPreviewImg.src = dataURL;
       }).catch(() => {
         hideSlotPreview();
       });
+    }
+
+    // 既存の generateThumbnailFromJSON を利用し、上に「最終更新」ラベルを描画して返す
+    async function generateThumbnailWithUpdatedAt(jsonText, updatedAtISO, w=280, h=180){
+      const baseURL = await generateThumbnailFromJSON(jsonText, w, h);
+      // 合成用キャンバス
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => { ctx.drawImage(img, 0, 0, w, h); resolve(); };
+        img.onerror = reject;
+        img.src = baseURL;
+      });
+      drawUpdatedAtBadge(c, updatedAtISO);
+      return c.toDataURL('image/png');
     }
 
     // スロットボタン上にポップアップ表示するサムネイルを生成
@@ -511,6 +583,51 @@
 
 
 
+    // === 更新日描画ユーティリティ ===
+    function drawUpdatedAtBadge(canvasEl, updatedAtISO){
+      const ctx = canvasEl.getContext('2d');
+      const text = '最終更新: ' + formatDateLabel(updatedAtISO);
+      ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+      const padX = 8, padY = 6;
+      // 影響が少ないように事前にメジャー
+      const metrics = ctx.measureText(text);
+      const w = metrics.width + padX*2;
+      const h = 18 + padY*2;
+      const x = canvasEl.width - w - 8;
+      const y = canvasEl.height - h - 8;
+
+      // 背景（角丸・白半透明）
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      roundRect(ctx, x, y, w, h, 8); ctx.fill();
+      // 枠線
+      ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+      ctx.lineWidth = 1;
+      roundRect(ctx, x, y, w, h, 8); ctx.stroke();
+      // 文字
+      ctx.fillStyle = '#334155';
+      ctx.fillText(text, x + padX, y + padY + 13);
+    }
+    function roundRect(ctx, x, y, w, h, r){
+      const rr = Math.min(r, w/2, h/2);
+      ctx.beginPath();
+      ctx.moveTo(x+rr, y);
+      ctx.arcTo(x+w, y, x+w, y+h, rr);
+      ctx.arcTo(x+w, y+h, x, y+h, rr);
+      ctx.arcTo(x, y+h, x, y, rr);
+      ctx.arcTo(x, y, x+w, y, rr);
+      ctx.closePath();
+    }
+    function formatDateLabel(iso){
+      if (!iso) return '(不明)';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return '(不明)';
+      const y  = d.getFullYear();
+      const m  = String(d.getMonth()+1).padStart(2,'0');
+      const dd = String(d.getDate()).padStart(2,'0');
+      const hh = String(d.getHours()).padStart(2,'0');
+      const mm = String(d.getMinutes()).padStart(2,'0');
+      return `${y}/${m}/${dd} ${hh}:${mm}`;
+    }
 
     // ===== 既存描画（要点） =====
     const groupOptions = { hasControls:true, hoverCursor:'move', originX:'left', originY:'top', opacity:1, objectCaching:false };
@@ -733,6 +850,10 @@
       z = Math.min(5,Math.max(0.2, z));
       canvas.zoomToPoint({x:opt.e.offsetX,y:opt.e.offsetY}, z);
       opt.e.preventDefault(); opt.e.stopPropagation();
+      // ★ ズーム時は拡大率/右上ワールド座標のみ保存（updatedAtは変更しない）
+      try{
+        saveViewportMeta(currentSlot, { touchUpdatedAt: false });
+      }catch(_){}
     });
 
     function handleKeydown(ev){
@@ -853,7 +974,9 @@
       if (!ok) return;
       canvas.clear();
       setCanvasBg('#ffffff');
-      saveToSlot(currentSlot);
+      // クリア直後の視点（ズーム1・原点）を保存しておく
+      canvas.setViewportTransform([1,0,0,1,0,0]);
+      saveToSlot(currentSlot); // 内部で meta も保存される
       resetHistoryBaseline();
     });
 
@@ -871,6 +994,9 @@
             applyingHistory = true;
             importCanvasJSON(String(reader.result), () => {
               applyingHistory = false;
+              // インポート直後は今の視点（ズーム1/原点）。必要ならここで fit を入れてもよい。
+              // 保存時に meta も併せて保存される。
+              // （このアプリではスロット保存は saveToSlot() 経由で行い、そこに meta 保存が入っている）
               saveToSlot(currentSlot);
               resetHistoryBaseline();
               refreshSlotButtonsUI();
