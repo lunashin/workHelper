@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <title>Fabric.js 図形作成ツール（スロット保存・復元・エクスポート対応）</title>
+  <title>Fabric.js 図形作成ツール（Undo/Redo・スロット改良・複数削除）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root{
@@ -11,312 +11,227 @@
       --slotBg:#f5f7fb;
       --slotSel:#0ea5e9;
       --slotTxt:#0b1323;
+      --slotEmptyBg:#f1f5f9;
+      --slotEmptyTxt:#94a3b8;
+      /* データあり（淡いオレンジ） */
+      --slotHasBg:#fff1e6; /* very light orange */
+      --slotHasBorder:#f59e0b;
+      --slotHasTxt:#9a3412;
     }
-    html,body{
-      height:100%;
-      margin:0;
-      color:var(--fg);
-      font-family:system-ui,-apple-system,Segoe UI,Roboto,"ヒラギノ角ゴ ProN",Meiryo,sans-serif;
-    }
-    header{
-      padding:10px 14px;
-      border-bottom:1px solid var(--line);
-      display:flex;
-      gap:18px;
-      align-items:center;
-      flex-wrap:wrap;
-    }
-    .kbd{
-      padding:.2em .45em;
-      border:1px solid var(--line);
-      border-bottom-width:2px;
-      border-radius:6px;
-      font-weight:600;
-      background:#f2f3f5;
-    }
-    #wrap{
-      height:calc(100% - 104px); /* header + toolbar 分を考慮 */
-    }
-    /* 下レイヤー（描画側）だけ白背景にする */
-    #stage{ display:block; outline:none; background:#fff; }
-    /* 上レイヤー（選択オーバーレイ）は必ず透明 */
-    .upper-canvas{ background: transparent !important; }
+    html,body{height:100%;margin:0;color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,"ヒラギノ角ゴ ProN",Meiryo,sans-serif;}
+    header{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;gap:18px;align-items:center;flex-wrap:wrap;}
+    .kbd{padding:.2em .45em;border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;font-weight:600;background:#f2f3f5;}
+    #wrap{height:calc(100% - 104px);}
+    #stage{display:block;outline:none;background:#fff;}
+    .upper-canvas{background: transparent !important;}
 
     /* スロットツールバー */
-    #toolbar{
-      display:flex;
-      align-items:center;
-      gap:10px;
-      padding:8px 14px;
-      border-bottom:1px solid var(--line);
-      background:#fafbff;
-      flex-wrap:wrap;
-    }
+    #toolbar{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:#fafbff;flex-wrap:wrap;}
     .slot-btn{
-      min-width:38px;
-      padding:6px 10px;
-      border:1px solid #cfd6e3;
-      border-radius:8px;
-      background:var(--slotBg);
-      color:var(--slotTxt);
-      font-weight:600;
-      cursor:pointer;
-      user-select:none;
+      min-width:38px;padding:6px 10px;border:1px solid #cfd6e3;border-radius:8px;
+      background:var(--slotBg);color:var(--slotTxt);font-weight:600;cursor:pointer;user-select:none;position:relative;
+      transition:background .15s ease,border-color .15s ease,color .15s ease;
     }
     .slot-btn.active{
-      border-color:var(--slotSel);
-      box-shadow:0 0 0 2px rgba(14,165,233,.2) inset;
-      color:var(--slotSel);
-      background:#e8f6fd;
+      border-color:var(--slotSel);box-shadow:0 0 0 4px rgba(233, 14, 14, 0.685) inset;color:var(--slotSel);background:#e8f6fd;
     }
-    .toolbar-button{
-      padding:6px 12px;
-      border:1px solid #cfd6e3;
-      border-radius:8px;
-      background:#ffffff;
-      font-weight:600;
-      cursor:pointer;
+    .slot-btn.empty{
+      background:var(--slotEmptyBg);color:var(--slotEmptyTxt);border-style:dashed;
     }
-    .toolbar-button:hover{ background:#f6f8fc; }
-    .spacer{ flex:1 1 auto; }
+    .slot-btn.hasdata{
+      background:var(--slotHasBg);border-color:var(--slotHasBorder);color:var(--slotHasTxt);
+    }
+    .toolbar-button{padding:6px 12px;border:1px solid #cfd6e3;border-radius:8px;background:#ffffff;font-weight:600;cursor:pointer;}
+    .toolbar-button:hover{background:#f6f8fc;}
+    .spacer{flex:1 1 auto;}
+
+    /* スロットサムネプレビュー */
+    #slotPreview{
+      position:fixed;left:0;top:0;transform: translate(12px, 12px);
+      display:none;z-index:9999;background:#fff;border:1px solid rgba(0,0,0,.12);
+      box-shadow:0 10px 24px rgba(2,6,23,.15);border-radius:10px;padding:6px;pointer-events:none;
+    }
+    #slotPreview img{display:block;max-width:280px;max-height:180px;}
+    #slotPreview .caption{font-size:12px;color:#475569;margin-top:4px;text-align:center;}
   </style>
 </head>
-
-
-
-
-
 <body>
   <header id="header">
     <div>
       <span class="kbd">c</span> 円 /
       <span class="kbd">s</span> 四角 /
       <span class="kbd">t</span> テキスト /
-      <span class="kbd">a</span> 線：始点確定 → プレビュー → クリックで終点確定
+      <span class="kbd">a</span> 線
     </div>
-    <div>ダブルクリック/Enter でテキスト編集／Space で色変更／Ctrl|Cmd+D で複製</div>
+    <div>
+      <span class="kbd">Ctrl|⌘ + Z</span> Undo /
+      <span class="kbd">Ctrl|⌘ + Shift + Z</span> Redo /
+      <span class="kbd">Ctrl|⌘ + A</span> すべて選択 /
+      <span class="kbd">d</span> 選択削除
+    </div>
   </header>
 
-  <!-- 保存スロット & エクスポート -->
   <div id="toolbar" aria-label="保存スロットとエクスポート">
     <div id="slotButtons"></div>
     <div class="spacer"></div>
-    <button id="pngBtn"    class="toolbar-button" type="button" title="キャンバスをPNGで保存">PNG出力</button>
-    <button id="importBtn" class="toolbar-button" type="button" title="JSONを現在のスロットにインポート">JSONインポート</button>
-    <button id="exportBtn" class="toolbar-button" type="button" title="現在の状態をJSONでエクスポート">JSONエクスポート</button>
-    <button id="clearBtn" class="toolbar-button"  type="button" title="現在のスロットをクリア">クリア</button>
+    <button id="imageBtn" class="toolbar-button" type="button">画像挿入</button>
+    <button id="pngBtn" class="toolbar-button" type="button">PNG出力</button>
+    <button id="importBtn" class="toolbar-button" type="button">JSONインポート</button>
+    <button id="exportBtn" class="toolbar-button" type="button">JSONエクスポート</button>
+    <button id="clearBtn" class="toolbar-button" type="button">クリア</button>
   </div>
 
   <div id="wrap">
     <canvas id="stage" tabindex="0" aria-label="図形キャンバス"></canvas>
   </div>
 
+  <div id="slotPreview" aria-hidden="true">
+    <img alt="slot preview" />
+    <div class="caption"></div>
+  </div>
 
-
-
-
-  <!-- Fabric.js v6.7.1 (cdnjs/671) -->
+  <!-- Fabric.js v6.7.1 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/671/index.min.js"></script>
   <script>
   (function(){
-    /** @type {HTMLCanvasElement} */
-    const canvasEl = document.getElementById('stage');
-    /** @type {HTMLElement} */
-    const headerEl = document.getElementById('header');
-    /** @type {HTMLElement} */
-    const toolbarEl = document.getElementById('toolbar');
+    // Debug
+    const DEBUG = true;
+    const D = (...a) => DEBUG && console.log('[thumb]', ...a);
 
-    /** @type {HTMLElement} */
+    const canvasEl = document.getElementById('stage');
+    const headerEl = document.getElementById('header');
+    const toolbarEl = document.getElementById('toolbar');
     const slotButtonsEl = document.getElementById('slotButtons');
-    /** @type {HTMLButtonElement} */
     const exportBtn = document.getElementById('exportBtn');
-    /** @type {HTMLButtonElement} */
+    const imageBtn  = document.getElementById('imageBtn');
     const importBtn = document.getElementById('importBtn');
-    /** @type {HTMLButtonElement} */
     const clearBtn  = document.getElementById('clearBtn');
-    /** @type {HTMLButtonElement} */
     const pngBtn    = document.getElementById('pngBtn');
 
-    /** @type {fabric.Canvas} Fabric キャンバス本体 */
+    const slotPreviewEl = document.getElementById('slotPreview');
+    const slotPreviewImg = slotPreviewEl.querySelector('img');
+    const slotPreviewCaption = slotPreviewEl.querySelector('.caption');
+
     const canvas = new fabric.Canvas(canvasEl, {
       backgroundColor: '#ffffff',
       selection: true,
       preserveObjectStacking: true
     });
 
-    // --- 既存：コントロールの見やすさ（任意・一括設定） ---
     fabric.Object.prototype.transparentCorners = false;
     fabric.Object.prototype.cornerColor = '#0ea5e9';
     fabric.Object.prototype.cornerStyle = 'rect';
     fabric.Object.prototype.cornerSize = 10;
     fabric.Object.prototype.borderColor = '#0ea5e9';
 
-    // --- 既存：色パレット（Spaceでローテーション） ---
-    const color_palette = ['#60a5fa','#22c55e','#f59e0b','#ef4444','#a78bfa'];
+    // カラーパレット
+    const color_palette = ['#60a5fa','#22c55e','#f59e0b','#ef4444','#a78bfa', "#ffffff", "#000000"];
 
-    /**
-     * 画面サイズに合わせて Canvas を調整
-     * @returns {void}
-     */
+    // 図形作成時の既定パラメータ
+    const line_param = { stroke:'#111827', strokeWidth:3, strokeLineCap:'round' };
+    const arrow_param = { width:32, height:32, fill:'#111827', stroke:'#111827', strokeWidth:2, originX:'center', originY:'center' };
+
     function resizeCanvasToViewport(){
-      const viewportWidth  = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-      // const headerHeight   = Math.ceil(headerEl.getBoundingClientRect().height) + 48; // header + toolbar 高さ相当
-      // canvas.setWidth(viewportWidth);
-      // canvas.setHeight(viewportHeight - headerHeight);
-      const headerHeight   = Math.ceil(headerEl.getBoundingClientRect().height);
-      const toolbarHeight  = Math.ceil(toolbarEl.getBoundingClientRect().height);
-      const targetHeight   = Math.max(0, viewportHeight - headerHeight - toolbarHeight);
-      canvas.setWidth(viewportWidth);
-      canvas.setHeight(targetHeight);
-
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const hh = Math.ceil(headerEl.getBoundingClientRect().height);
+      const th = Math.ceil(toolbarEl.getBoundingClientRect().height);
+      canvas.setWidth(vw);
+      canvas.setHeight(Math.max(0, vh - hh - th));
       canvas.calcOffset();
-      // canvas.renderAll();
-      (canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll());
+      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
     }
     window.addEventListener('resize', resizeCanvasToViewport, { passive:true });
 
-    /** @type {{x:number,y:number}|null} 直近ポインタ位置 */
     let lastPointer = null;
-
-    /**
-     * 新規配置の左上座標（未取得時は中央）
-     * @returns {{x:number,y:number}}
-     */
     function getDropPoint(){
       if (lastPointer) return lastPointer;
       return { x: canvas.getWidth()/2, y: canvas.getHeight()/2 };
     }
 
-    // ---------------- 保存スロット機能 ここから ----------------
-
-    /** 保存スロット数 */
+    // ===== スロット機能 =====
     const SLOT_COUNT = 10;
-    /** localStorage のキー接頭辞 */
     const LS_KEY_PREFIX = 'wb_slot_v1_';
-    /** 現在選択中のスロット番号（0-based） */
     let currentSlot = 0;
-    /** 自動保存のデバウンス用タイマー */
     let autosaveTimer = null;
 
-    /**
-     * キャンバス状態を JSON 文字列にして返す
-     * @returns {string}
-     */
     function exportCanvasJSON(){
-      // 追加プロパティなし（_label は復元時に再付与する）
       const json = canvas.toJSON();
-      // return JSON.stringify(json);
-      return JSON.stringify(json, null , 2);
+      return JSON.stringify(json, null, 2);
     }
-
-    /**
-     * JSON 文字列からキャンバスを復元する
-     * @param {string} jsonText
-     * @param {() => void=} cb 復元後のコールバック
-     * @returns {void}
-     */
     function importCanvasJSON(jsonText, cb){
       try{
         const parsed = JSON.parse(jsonText);
         canvas.loadFromJSON(parsed, () => {
-          // 復元後にグループへ _label を再アタッチ（中央ラベルを探す）
           attachGroupLabelPointers();
-          // canvas.renderAll();
           canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
           canvasEl.focus({preventScroll:true});
           cb && cb();
         });
-      }catch(err){
-        console.error('loadFromJSON failed:', err);
-      }
+      }catch(err){ console.error('loadFromJSON failed:', err); }
     }
-
-    /**
-     * すべてのグループに対して、内部の Text を _label として再設定する
-     * @returns {void}
-     */
     function attachGroupLabelPointers(){
-      const objs = canvas.getObjects();
-      for (const obj of objs){
+      for (const obj of canvas.getObjects()){
         if (obj.type === 'group' && obj._objects){
           const label = obj._objects.find(o => o.type === 'text');
           if (label) obj._label = label;
-          // 復元後に中央へ（スナップ）
           if (obj._label) centerGroupLabel(obj);
         }
       }
     }
-
-    /**
-     * 指定スロットに保存
-     * @param {number} slot
-     * @returns {void}
-     */
     function saveToSlot(slot){
       try{
         const key = LS_KEY_PREFIX + slot;
         localStorage.setItem(key, exportCanvasJSON());
-      }catch(err){
-        console.error('saveToSlot failed:', err);
-      }
+        refreshSlotButtonsUI();
+      }catch(err){ console.error('saveToSlot failed:', err); }
     }
-
-    /**
-     * 指定スロットから読み込み（なければ何もしない）
-     * @param {number} slot
-     * @returns {void}
-     */
     function loadFromSlot(slot){
       const key = LS_KEY_PREFIX + slot;
       const json = localStorage.getItem(key);
       if (!json){
-        // 何も保存されていない場合はクリア
         canvas.clear();
-        // canvas.setBackgroundColor('#ffffff', () => {});
         setCanvasBg('#ffffff');
-        // canvas.renderAll();
         return;
       }
       importCanvasJSON(json);
     }
-
     function setCanvasBg(color){
       canvas.backgroundColor = color;
-      (canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll());
+      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
     }
 
-    /**
-     * スロットボタンの UI を再描画
-     * @returns {void}
-     */
+    function slotHasData(i){
+      const storage_data = localStorage.getItem(LS_KEY_PREFIX + i);
+      if (!!storage_data) {
+        const parsed = JSON.parse(storage_data);
+        return (parsed.objects.length !== 0);
+      }
+      return false;
+    }
+
     function refreshSlotButtonsUI(){
       const btns = slotButtonsEl.querySelectorAll('.slot-btn');
       btns.forEach((btn, idx) => {
+        const has = slotHasData(idx);
         btn.classList.toggle('active', idx === currentSlot);
+        btn.classList.toggle('empty', !has);
+        btn.classList.toggle('hasdata', has);
       });
     }
 
-    /**
-     * 指定インデックスのスロットを選択して復元・描画する
-     * @param {number} i - 0-based slot index（範囲外でもOK：内部で丸める）
-     * @returns {void}
-     */
     function selectSlot(i){
-      // 範囲丸め
-      currentSlot = ((i % SLOT_COUNT) + SLOT_COUNT) % SLOT_COUNT;
+      currentSlot = Math.max(0, Math.min(SLOT_COUNT-1, i));
       refreshSlotButtonsUI();
+      applyingHistory = true;
       loadFromSlot(currentSlot);
+      applyingHistory = false;
+      resetHistoryBaseline();
       canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
       canvasEl.focus({preventScroll:true});
-      // 切り替え後の自動保存先はこのスロット
       scheduleAutosave();
     }
 
-    /**
-     * スロットボタン群を生成
-     * @returns {void}
-     */
     function buildSlotButtons(){
       slotButtonsEl.innerHTML = '';
       for (let i=0; i<SLOT_COUNT; i++){
@@ -325,292 +240,327 @@
         btn.className = 'slot-btn';
         btn.textContent = String(i+1);
         btn.title = `スロット ${i+1}`;
+        btn.dataset.slot = String(i);
 
         btn.addEventListener('click', () => selectSlot(i));
+
+        // Shift+ホバーでプレビュー
+        // btn.addEventListener('pointerenter', (e) => { hoveredSlot = i; lastHoverEvent = e; reevaluateSlotPreview(); });
+        // btn.addEventListener('pointermove',  (e) => { hoveredSlot = i; lastHoverEvent = e; reevaluateSlotPreview(); positionSlotPreview(e); });
+        // btn.addEventListener('pointerleave', () => { hoveredSlot = null; hideSlotPreview(); });
+        btn.addEventListener('pointerenter', (e) => {
+          hoveredSlot = i;
+          lastHoverEvent = e;
+          if (e.shiftKey) showSlotPreview(i, e);
+          else hideSlotPreview();
+        });
+        btn.addEventListener('pointermove', (e) => {
+          hoveredSlot = i;
+          lastHoverEvent = e;
+          if (e.shiftKey) showSlotPreview(i, e);
+          else hideSlotPreview();
+        });
+        btn.addEventListener('pointerleave', () => {
+          hoveredSlot = null;
+          hideSlotPreview();
+        });
 
         slotButtonsEl.appendChild(btn);
       }
       refreshSlotButtonsUI();
     }
 
-    /**
-     * 自動保存をデバウンスして実行
-     * @returns {void}
-     */
     function scheduleAutosave(){
-      if (autosaveTimer) clearTimeout(autosaveTimer);
-      autosaveTimer = setTimeout(() => {
-        saveToSlot(currentSlot);
-      }, 300); // 0.3s 後に保存（連続操作の無駄保存を抑制）
+      clearTimeout(autosaveTimer);
+      autosaveTimer = setTimeout(() => saveToSlot(currentSlot), 300);
     }
 
-    // --- 変更イベントで自動保存（選択・移動・追加・削除・変形など） ---
-    ['object:added','object:removed','object:modified','object:scaled','object:rotated','object:moved'].forEach(evtName=>{
-      canvas.on(evtName, () => scheduleAutosave());
+    // 変更イベント→自動保存 & 履歴
+    ['object:added','object:removed','object:modified','object:scaled','object:rotated','object:moved'].forEach(evt=>{
+      canvas.on(evt, () => { scheduleAutosave(); pushHistoryDebounced(); });
     });
 
-    // ---------------- 保存スロット機能 ここまで ----------------
+    // ===== Undo/Redo =====
+    const HISTORY_LIMIT = 50;
+    const historyStack = [];
+    const redoStack = [];
+    let applyingHistory = false;
+    let historyTimer = null;
 
-    // ====== 既存の描画・編集ロジック（あなたのコードを尊重しつつ一部整形） ======
-
-    // マウス移動で現在位置を記録 & 線プレビュー更新
-    canvas.on('mouse:move', (evt) => {
-      const p = canvas.getPointer(evt.e);
-      lastPointer = { x: p.x, y: p.y };
-      updateLinePreviewIfNeeded();
-    });
-
-    /** 図形移動の微調整 */
-    function nudgeObject(obj, dx, dy){
-      obj.set({ left: (obj.left||0)+dx, top: (obj.top||0)+dy });
-      obj.setCoords();
-      canvas.renderAll();
+    function getCanvasSnapshot(){ return exportCanvasJSON(); }
+    function applySnapshot(json){
+      applyingHistory = true;
+      canvas.clear();
+      setCanvasBg('#ffffff');
+      importCanvasJSON(json, () => {
+        applyingHistory = false;
+        canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+      });
+    }
+    function pushHistory(){
+      if (applyingHistory) return;
+      const snap = getCanvasSnapshot();
+      if (historyStack.length && historyStack[historyStack.length-1] === snap) return;
+      historyStack.push(snap);
+      if (historyStack.length > HISTORY_LIMIT) historyStack.shift();
+      redoStack.length = 0;
+    }
+    function pushHistoryDebounced(){
+      if (applyingHistory) return;
+      clearTimeout(historyTimer);
+      historyTimer = setTimeout(() => pushHistory(), 200);
+    }
+    function resetHistoryBaseline(){
+      historyStack.length = 0; redoStack.length = 0; pushHistory();
+    }
+    function undo(){
+      if (historyStack.length <= 1) return;
+      const cur = historyStack.pop();
+      const prev = historyStack[historyStack.length-1];
+      redoStack.push(cur);
+      applySnapshot(prev);
+    }
+    function redo(){
+      if (!redoStack.length) return;
+      const next = redoStack.pop();
+      historyStack.push(next);
+      applySnapshot(next);
     }
 
-    /** 複製（Fabric v6 は Promise 版） */
-    function duplicateObject(obj){
-      obj.clone()
-        .then((clone) => {
-          clone.set({
-            left: (obj.left || 0) + 16,
-            top:  (obj.top  || 0) + 16
+    // ===== サムネプレビュー =====
+    const slotThumbCache = new Map(); // slotIndex -> dataURL
+    let hoveredSlot = null;
+    let lastHoverEvent = null;
+    let shiftHeld = false;
+
+    // function hideSlotPreview(){ slotPreviewEl.style.display = 'none'; }
+    // スロットボタン上に表示するプレビューを消去
+    function hideSlotPreview(){
+      slotPreviewEl.style.display = 'none';
+      // 追加：古いサムネが残るのを防止
+      slotPreviewImg.removeAttribute('src');
+    }
+
+    function positionSlotPreview(e){
+      if (!e) return;
+      slotPreviewEl.style.left = e.clientX + 'px';
+      slotPreviewEl.style.top  = e.clientY + 'px';
+    }
+
+    function reevaluateSlotPreview(){
+      if (hoveredSlot === null || !shiftHeld){ hideSlotPreview(); return; }
+      if (!slotHasData(hoveredSlot)){ hideSlotPreview(); return; }
+
+      const e = lastHoverEvent;
+      if (e) positionSlotPreview(e);
+      slotPreviewCaption.textContent = `スロット ${hoveredSlot+1}`;
+
+      const cached = slotThumbCache.get(hoveredSlot);
+      if (cached){
+        slotPreviewImg.src = cached;
+        slotPreviewEl.style.display = 'block';
+        return;
+      }
+      const json = localStorage.getItem(LS_KEY_PREFIX + hoveredSlot);
+      if (!json){ hideSlotPreview(); return; }
+
+      generateThumbnailFromJSON(json, 280, 180).then((dataURL) => {
+        slotThumbCache.set(hoveredSlot, dataURL);
+        slotPreviewImg.src = dataURL;
+        slotPreviewEl.style.display = 'block';
+      }).catch(() => hideSlotPreview());
+    }
+
+    // Shiftの押下状態でプレビュー再評価（「あと押し」に対応）
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Shift'){ shiftHeld = true; reevaluateSlotPreview(); }
+    }, true);
+    window.addEventListener('keyup', (e) => {
+      if (e.key === 'Shift'){ shiftHeld = false; hideSlotPreview(); }
+    }, true);
+
+    // スロットボタン上のプレビューを表示
+    function showSlotPreview(slotIndex, e){
+      if (!slotHasData(slotIndex)) { hideSlotPreview(); return; }
+
+      // ここで枠を先に出す（画像は未セットのまま）
+      positionSlotPreview(e);
+      slotPreviewCaption.textContent = `スロット ${slotIndex+1}`;
+      slotPreviewImg.removeAttribute('src'); // 古い残像を消す
+      slotPreviewEl.style.display = 'block';
+
+      const cached = slotThumbCache.get(slotIndex);
+      if (cached){
+        slotPreviewImg.src = cached;
+        return; // 既に枠は表示済み
+      }
+      const json = localStorage.getItem(LS_KEY_PREFIX + slotIndex);
+      if (!json){ hideSlotPreview(); return; }
+
+      generateThumbnailFromJSON(json, 280, 180).then((dataURL) => {
+        slotThumbCache.set(slotIndex, dataURL);
+        // すでに枠は出ているので src を付け替えるだけ
+        slotPreviewImg.src = dataURL;
+      }).catch(() => {
+        hideSlotPreview();
+      });
+    }
+
+    // スロットボタン上にポップアップ表示するサムネイルを生成
+    // @note : v6の Promise 返却に対応。旧版（callback）でも自動フォールバックします。
+    async function generateThumbnailFromJSON(jsonText, targetW = 280, targetH = 180) {
+      return new Promise(async (resolve, reject) => {
+        try {
+          // 実体の <canvas> を使う（nullを渡さない）
+          const offscreen = document.createElement('canvas');
+          offscreen.width = targetW;
+          offscreen.height = targetH;
+
+          const sc = new fabric.StaticCanvas(offscreen, {
+            width: targetW,
+            height: targetH,
+            backgroundColor: '#ffffff',
+            enableRetinaScaling: false,
+            renderOnAddRemove: false
           });
-          canvas.add(clone);
-          canvas.setActiveObject(clone);
-          (canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll());
-        })
-        .catch((err) => console.error('clone failed:', err));
+
+          const parsed = (typeof jsonText === 'string') ? JSON.parse(jsonText) : jsonText;
+          const objsRaw = Array.isArray(parsed?.objects) ? parsed.objects : [];
+
+          // 背景
+          const bg = parsed.backgroundColor || parsed.background || '#ffffff';
+          // sc.setBackgroundColor(bg, sc.renderAll.bind(sc));
+
+          if (!objsRaw.length) {
+            sc.renderAll();
+            return resolve(offscreen.toDataURL('image/png'));
+          }
+
+          // 画像対策
+          const reviver = (orig, obj) => {
+            if (obj && obj.type === 'image' && !obj.crossOrigin) obj.crossOrigin = 'anonymous';
+          };
+
+          // v6: Promise 返却 / 旧版: callback の両対応
+          let enlivened;
+          const maybePromise = fabric.util.enlivenObjects(objsRaw, { reviver });
+
+          if (maybePromise && typeof maybePromise.then === 'function') {
+            // v6: Promise
+            enlivened = await maybePromise;
+          } else {
+            // 旧版: callback シグネチャにフォールバック
+            return fabric.util.enlivenObjects(
+              objsRaw,
+              (arr) => {
+                try {
+                  arr.forEach(o => sc.add(o));
+                  sc.renderAll();
+                  const url = _fitAndSnapshot(sc, targetW, targetH);
+                  resolve(url);
+                } catch (e) { reject(e); }
+              },
+              null,
+              reviver
+            );
+          }
+
+          // 以降 v6
+          enlivened.forEach(o => sc.add(o));
+          sc.renderAll();
+
+          const url = _fitAndSnapshot(sc, targetW, targetH);
+          resolve(url);
+
+        } catch (e) {
+          reject(e);
+        }
+      });
+
+      // 内部: 外接矩形にフィットさせて PNG を返す
+      function _fitAndSnapshot(sc, targetW, targetH) {
+        const objs = sc.getObjects();
+        if (!objs.length) {
+          sc.renderAll();
+          return sc.getElement().toDataURL('image/png');
+        }
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const o of objs) {
+          const br = o.getBoundingRect(true, true);
+          minX = Math.min(minX, br.left);
+          minY = Math.min(minY, br.top);
+          maxX = Math.max(maxX, br.left + br.width);
+          maxY = Math.max(maxY, br.top  + br.height);
+        }
+        const pad = 12;
+        const contentW = Math.max(1, (maxX - minX));
+        const contentH = Math.max(1, (maxY - minY));
+        const sx = (targetW - pad * 2) / contentW;
+        const sy = (targetH - pad * 2) / contentH;
+        const s  = Math.min(sx, sy);
+        const tx = (-minX) * s + pad;
+        const ty = (-minY) * s + pad;
+
+        sc.setViewportTransform([ s, 0, 0, s, tx, ty ]);
+        sc.renderAll();
+
+        // StaticCanvas に渡した実体 canvas から取得
+        return sc.getElement().toDataURL('image/png');
+      }
     }
 
-    /** 回転 */
-    function rotateObject(obj, deg){
-      const cur = obj.angle || 0;
-      obj.rotate(cur + deg);
-      obj.setCoords();
-      canvas.renderAll();
-    }
 
-    /** グループ共通オプション */
-    const groupOptions = {
-      hasControls: true,
-      hoverCursor: 'move',
-      originX: 'left',
-      originY: 'top',
-      opacity: 1,
-      objectCaching: false
-    };
 
-    /**
-     * グループ内テキストラベル（group._label）を、図形グループの「見た目の中心」に再配置する。
-     * - getBoundingRect(true, true) でグループの外接矩形（キャンバス座標）を取得
-     * - その中心点を group.toLocalPoint(...) でローカル座標に変換して配置
-     * @param {fabric.Group} group
-     * @returns {void}
-     */
+
+    // ===== 既存描画（要点） =====
+    const groupOptions = { hasControls:true, hoverCursor:'move', originX:'left', originY:'top', opacity:1, objectCaching:false };
+
     function centerGroupLabel(group){
       if (!group || !group._label) return;
-
-      // グループの見た目の外接矩形（キャンバス座標）
       const br = group.getBoundingRect(true, true);
-      const centerCanvas = new fabric.Point(
-        br.left + br.width / 2,
-        br.top  + br.height / 2
-      );
-
-      // キャンバス座標 → グループのローカル座標へ変換
-      // const centerLocal = group.toLocalPoint(centerCanvas, 'left', 'top');
-      // ★ v6 互換：キャンバス座標 → グループローカル座標を行列で求める
-      //   object->canvas 変換行列を逆行列にして、キャンバス点に適用
-      const m  = group.calcTransformMatrix();                  // Object -> Canvas
-      const im = fabric.util.invertTransform(m);               // Canvas -> Object
+      const centerCanvas = new fabric.Point(br.left + br.width/2, br.top + br.height/2);
+      const m  = group.calcTransformMatrix();
+      const im = fabric.util.invertTransform(m);
       const centerLocal = fabric.util.transformPoint(centerCanvas, im);
-
-      // ラベルを中央へ（中央基準で配置）
-      group._label.set({
-        originX: 'center',
-        originY: 'center',
-        left: centerLocal.x,
-        top:  centerLocal.y,
-        textAlign: 'center'
-      });
-
-      // Debug
-      console.log('[DBG] label after', {
-        localX: centerLocal.x,
-        localY: centerLocal.y,
-        groupAngle: group.angle,
-        scaleX: group.scaleX, scaleY: group.scaleY
-      });
-
+      group._label.set({ originX:'center', originY:'center', left:centerLocal.x, top:centerLocal.y, textAlign:'center' });
       group.setCoords();
-
-      // Debug
-      console.log('[DBG] label after:', { left: group._label.left, top: group._label.top, originX: group._label.originX, originY: group._label.originY });
     }
 
-    /** 図形+ラベルのグループを作成して追加 */
     function createLabeledGroup(baseObjects){
       const dropPoint = getDropPoint();
-
-      const labelText = new fabric.Text('', {
-        fontSize: 16, 
-        fill: '#0f172a',
-        originX:'center', 
-        originY:'center',
-        top:0, 
-        left:0, 
-        textAlign:'center',
-        opacity:1, 
-        objectCaching:false
-      });
-      // 子図形にも可視パラメータを念のため付与
-      baseObjects.forEach(o => o.set({ opacity:1, objectCaching:false, globalCompositeOperation:'source-over' }));
-
-      const group = new fabric.Group([...baseObjects, labelText], {
-        ...groupOptions, 
-        left: dropPoint.x, 
-        top: dropPoint.y,
-        globalCompositeOperation:'source-over'
-      });
+      const labelText = new fabric.Text('', { fontSize:16, fill:'#0f172a', originX:'center', originY:'center', top:0, left:0, textAlign:'center', objectCaching:false });
+      baseObjects.forEach(o => o.set({ objectCaching:false, globalCompositeOperation:'source-over' }));
+      const group = new fabric.Group([...baseObjects, labelText], { ...groupOptions, left: dropPoint.x, top: dropPoint.y, globalCompositeOperation:'source-over' });
       group._label = labelText;
       canvas.add(group);
-
-      // // ※ ここはあなたの現状のロジックに合わせて必要なら中央化
-      // labelText.set({ left: group.width/2, top: group.height/2 });
-      // 見た目の中心に確実に配置（スケール・回転の影響を受けても中央）
       centerGroupLabel(group);
-
       canvas.setActiveObject(group);
-      group.setCoords();
-      // 最前面に出して確実に描画
-      // canvas.renderAll();
       if (canvas.bringToFront) canvas.bringToFront(group);
-      (canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll());
-
+      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
       return group;
     }
-
-    /** 図形ファクトリ */
     function addCircle(){
-      const circle = new fabric.Circle({
-        left:0, top:0, radius:60,
-        fill:'#22c55e', stroke:'#052e16', strokeWidth:3, strokeUniform:true
-      });
+      const circle = new fabric.Circle({ left:0, top:0, radius:60, fill:'#22c55e', stroke:'#052e16', strokeWidth:3, strokeUniform:true });
       createLabeledGroup([circle]);
     }
     function addRect(){
-      const rect = new fabric.Rect({
-        left:0, top:0, width:150, height:100, rx:8, ry:8,
-        fill:'#60a5fa', stroke:'#0a2472', strokeWidth:3, strokeUniform:true
-      });
+      const rect = new fabric.Rect({ left:0, top:0, width:150, height:100, rx:8, ry:8, fill:'#60a5fa', stroke:'#0a2472', strokeWidth:3, strokeUniform:true });
       createLabeledGroup([rect]);
-
-      // console.log("-------- debug -------");
-      // console.log(canvas.getWidth());
-      // console.log(canvas.getHeight());
-      // console.log(canvas.getObjects().map(o => ({type:o.type, visible:o.visible, opacity:o.opacity})));
     }
-
-    // function addTextBox(){
-    //   const box = new fabric.Rect({
-    //     left:0, top:0, width:200, height:80, rx:10, ry:10,
-    //     fill:'#f59e0b', stroke:'#7a3d00', strokeWidth:3, strokeUniform:true
-    //   });
-    //   createLabeledGroup([box]);
-    // }
-
     function addTextBox(){
       const drop = getDropPoint();
-      // 枠なし・背景なし・空文字の Textbox をそのまま配置
-      const tb = new fabric.Textbox('', {
-        left: drop.x, top: drop.y,
-        fontSize: 18,
-        fill: '#0f172a',
-        backgroundColor: '', // 透明
-        textAlign: 'left',
-        objectCaching: false
-      });
+      const nextText = window.prompt('テキストを入力してください：', '');
+      if (nextText === null) return;
+      const tb = new fabric.Textbox(nextText, { left: drop.x, top: drop.y, fontSize:18, fill:'#0f172a', textAlign:'left', objectCaching:false });
       canvas.add(tb);
       canvas.setActiveObject(tb);
       canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
     }
 
-    /** 任意オブジェクト群をグループ化して追加（線＋矢印ヘッド用） */
-    function addGroup(objects) {
-      const group = new fabric.Group([...objects], { ...groupOptions });
-      canvas.add(group);
-      canvas.setActiveObject(group);
-      group.setCoords();
-      canvas.renderAll();
-      return group;
-    }
-
-    /** 色ローテーション */
-    function cycleFillColor(obj){
-      let target = obj;
-      if (obj.type === 'group' && obj._objects && obj._objects.length){
-        const shape = obj._objects.find(
-          o => o.type === 'rect' || o.type === 'circle' || o.type === 'triangle' || o.type === 'line' || o.type === 'path'
-        );
-        if (shape) target = shape;
-      }
-      const current = (target.fill || color_palette[0]).toString();
-      const idx = color_palette.indexOf(current);
-      const next = color_palette[(idx + 1 + color_palette.length) % color_palette.length];
-      target.set({ fill: next });
-      canvas.renderAll();
-    }
-
-    /** ダブルクリック/Enter でラベル編集 */
-    function editLabelByDblClick(targetObject){
-      if (!targetObject) return;
-      // グループ or 単体テキストの両方に対応
-      const group = (targetObject.type === 'group') ? targetObject : targetObject.group;
-      const isTextOnly = (targetObject.type === 'textbox' || targetObject.type === 'text');
-      let labelText = null;
-
-      if (group){
-        labelText = group._label || (group._objects ? group._objects.find(o=>o.type==='text') : null);
-        if (!labelText) return;
-      }else if (isTextOnly){
-        labelText = targetObject; // 単体テキストを直接編集
-      }else{
-        return;
-      }
-
-      const currentText = labelText.text || '';
-      const nextText = window.prompt('図形のテキストを入力してください：', currentText);
-      if (nextText === null) return;
-
-      // --- debug: 編集直前の各種座標 ---
-      if (group){
-        const br = group.getBoundingRect(true, true);
-        console.log('[DBG] group aabb (canvas):', br);
-        console.log('[DBG] group w/h/local:', group.width, group.height, 'angle=', group.angle, 'scale=', group.scaleX, group.scaleY);
-        console.log('[DBG] label before:', { left: labelText.left, top: labelText.top, originX: labelText.originX, originY: labelText.originY });
-      }
-
-      labelText.set({ text: nextText, textAlign:'center', originX:'center', originY:'center' });
-      // // ★グループのときは必ず中央に再配置（ローカル座標の中心）
-      // if (group){
-      //   labelText.set({ left: group.width/2, top: group.height/2 });
-      // }
-      // ★グループのときは見た目の中心に再配置（回転・拡大縮小後もずれない）
-      if (group){
-        centerGroupLabel(group);
-      }
-
-      (group || labelText).setCoords();
-      canvas.renderAll();
-    }
-
-
-
-
-    // ===== 線描画（aキー → プレビュー → クリックで確定） =====
-    let pendingLineStart = null;            // 始点
-    let previewLine = null;                 // プレビュー線
-    let previewLineArrowHead = null;        // プレビュー矢印ヘッド
+    // 線
+    let pendingLineStart = null;
+    let previewLine = null;
+    let previewLineArrowHead = null;
 
     function startLineDrawing(){
       const start = getDropPoint();
@@ -620,119 +570,70 @@
       if (previewLineArrowHead) { canvas.remove(previewLineArrowHead); previewLineArrowHead = null; }
 
       previewLine = new fabric.Line([start.x, start.y, start.x, start.y],{
-        stroke:'#111827', strokeWidth:2, strokeLineCap:'round',
+        stroke: line_param.stroke, strokeWidth: line_param.strokeWidth, strokeLineCap: line_param.strokeLineCap,
         opacity:.6, selectable:false, evented:false, strokeDashArray:[6,6]
       });
       previewLineArrowHead = new fabric.Triangle({
-        left:start.x, top:start.y, width:32, height:32, angle:0,
-        // fill:'black', stroke:'black', strokeWidth:2, originX:'center', originY:'center',
-        fill:'#111827', stroke:'#111827', strokeWidth:2, originX:'center', originY:'center',
-        selectable:false, evented:false
-        
+        left:start.x, top:start.y, width:arrow_param.width, height:arrow_param.height, angle:0,
+        fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
+        originX:arrow_param.originX, originY:arrow_param.originY, selectable:false, evented:false
       });
 
       canvas.add(previewLine, previewLineArrowHead);
       canvas.bringToFront && canvas.bringToFront(previewLine);
       canvas.renderAll();
     }
-
+    function calcurateArrowDegree(x1, y1, x2, y2) {
+      return Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+    }
     function updateLinePreviewIfNeeded(){
       if (!pendingLineStart || !previewLine) return;
       const pos = getDropPoint();
       previewLine.set({ x2: pos.x, y2: pos.y });
-      // 矢印位置
       if (previewLineArrowHead){
         previewLineArrowHead.set({ left:pos.x, top:pos.y });
-        // 角度計算（簡易）
-        const dx = pos.x - previewLine.x1;
-        const dy = pos.y - previewLine.y1;
-        const angle = Math.atan2(dy, dx) * 180 / Math.PI;
-        previewLineArrowHead.set({ angle: angle + 90 });
+        previewLineArrowHead.set({ angle: calcurateArrowDegree(previewLine.x1, previewLine.y1, pos.x, pos.y) + 90 });
       }
       previewLine.setCoords();
       previewLineArrowHead && previewLineArrowHead.setCoords();
       canvas.renderAll();
     }
-
     function finalizeLineDrawingIfNeeded(domEvent){
       if (!pendingLineStart) return false;
-      const p = canvas.getPointer(domEvent);
-      const endX = p.x, endY = p.y;
 
-      // const line = new fabric.Line([pendingLineStart.x, pendingLineStart.y, endX, endY],{
-      //   stroke:'#111827', strokeWidth:3, strokeLineCap:'round', selectable:true
-      // });
+      const hasPreview = !!previewLine;
+      const x1 = hasPreview ? previewLine.x1 : pendingLineStart.x;
+      const y1 = hasPreview ? previewLine.y1 : pendingLineStart.y;
+      const x2 = hasPreview ? previewLine.x2 : canvas.getPointer(domEvent).x;
+      const y2 = hasPreview ? previewLine.y2 : canvas.getPointer(domEvent).y;
 
-      // canvas.add(line);
-      // if (previewLineArrowHead){
-      //   addGroup([line, previewLineArrowHead]);
-      // }
-
-      // // プレビューを消して状態クリア
-      // if (previewLine){ canvas.remove(previewLine); previewLine = null; }
-      // previewLineArrowHead = null;
-      // pendingLineStart = null;
-
-      // canvas.renderAll();
-      // scheduleAutosave(); // 追加直後を保存
-      // return true;
-
-      // ---- ここから：相対座標で安定化した矢印グループを生成 ----
-      const x1 = pendingLineStart.x, y1 = pendingLineStart.y;
-      const x2 = endX,              y2 = endY;
       const minX = Math.min(x1, x2);
       const minY = Math.min(y1, y2);
-      const rel = (x, y) => ({ x: x - minX, y: y - minY });
-      const p1 = rel(x1, y1);
-      const p2 = rel(x2, y2);
-      // 軸線（相対座標）
+      const p1 = { x: x1 - minX, y: y1 - minY };
+      const p2 = { x: x2 - minX, y: y2 - minY };
+
       const shaftLine = new fabric.Line([p1.x, p1.y, p2.x, p2.y], {
-        stroke: '#111827',
-        strokeWidth: 3,
-        strokeLineCap: 'round'
+        stroke: line_param.stroke, strokeWidth: line_param.strokeWidth, strokeLineCap: line_param.strokeLineCap,
       });
-      // 矢印ヘッド（三角形）：終点に配置、向きは atan2 から算出
-      const angleDeg = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
-      const headSize = 32;
+      const angleDeg = calcurateArrowDegree(x1, y1, x2, y2);
       const arrowHead = new fabric.Triangle({
-        left:  p2.x,
-        top:   p2.y,
-        width: headSize,
-        height: headSize,
-        angle: angleDeg + 90,   // 先端が進行方向を向くよう 90°オフセット
-        fill:  '#111827',
-        stroke:'#111827',
-        strokeWidth: 2,
-        originX: 'center',
-        originY: 'center'
+        left:p2.x, top:p2.y, width:arrow_param.width, height:arrow_param.height, angle:angleDeg + 90,
+        fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
+        originX:arrow_param.originX, originY:arrow_param.originY,
       });
 
-      // 必要なら当たり判定を安定させる不可視の外枠（任意）
-      // const phantom = new fabric.Rect({ left:0, top:0, width:Math.abs(x2-x1), height:Math.abs(y2-y1),
-      //   fill:'rgba(0,0,0,0)', selectable:false, evented:false });
-
-      // 相対座標の子だけでグループを作成（グループ原点＝(minX, minY)）
-      const arrowGroup = new fabric.Group(
-        [shaftLine, arrowHead],   // phantom を入れるなら配列に追加
-        {
-          ...groupOptions,
-          left: minX,
-          top:  minY
-        }
-      );
+      const arrowGroup = new fabric.Group([shaftLine, arrowHead], { ...groupOptions, left:minX, top:minY });
       canvas.add(arrowGroup);
       canvas.setActiveObject(arrowGroup);
 
-      // プレビューを消して状態クリア
       if (previewLine){ canvas.remove(previewLine); previewLine = null; }
       if (previewLineArrowHead){ canvas.remove(previewLineArrowHead); previewLineArrowHead = null; }
       pendingLineStart = null;
       canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
-      scheduleAutosave(); // 追加直後を保存
-
+      scheduleAutosave();
+      pushHistory();
       return true;
     }
-
     function cancelLinePreview(render){
       if (previewLine){ canvas.remove(previewLine); previewLine = null; }
       if (previewLineArrowHead){ canvas.remove(previewLineArrowHead); previewLineArrowHead = null; }
@@ -740,36 +641,100 @@
       if (render) canvas.renderAll();
     }
 
-    // ====== イベント登録 ======
+    // ===== ユーティリティ =====
+    function cycleFillColor(obj){
+      let target = obj;
+      if (obj && obj.type === 'group' && obj._objects && obj._objects.length){
+        const shape = obj._objects.find(o => ['rect','circle','triangle','line','path'].includes(o.type));
+        if (shape) target = shape;
+      }
+      if (!target) return;
+      const current = (target.fill || color_palette[0]).toString();
+      const idx = color_palette.indexOf(current);
+      const next = color_palette[(idx + 1 + color_palette.length) % color_palette.length];
+      target.set({ fill: next });
+      canvas.renderAll();
+    }
+    function editLabelByDblClick(targetObject){
+      if (!targetObject) return;
+      const group = (targetObject.type === 'group') ? targetObject : targetObject.group;
+      const isTextOnly = (targetObject.type === 'textbox' || targetObject.type === 'text');
+      let labelText = null;
+
+      if (group){
+        labelText = group._label || (group._objects ? group._objects.find(o=>o.type==='text') : null);
+        if (!labelText) return;
+      }else if (isTextOnly){
+        labelText = targetObject;
+      }else return;
+
+      const currentText = labelText.text || '';
+      const nextText = window.prompt('図形のテキストを入力してください：', currentText);
+      if (nextText === null) return;
+
+      labelText.set({ text: nextText, textAlign:'center', originX:'center', originY:'center' });
+      if (group){ centerGroupLabel(group); }
+      (group || labelText).setCoords();
+      canvas.renderAll();
+    }
+    function nudgeObject(obj, dx, dy){
+      obj.set({ left: (obj.left||0)+dx, top: (obj.top||0)+dy });
+      obj.setCoords();
+      canvas.renderAll();
+    }
+    function duplicateObject(obj){
+      if (!obj) return;
+      obj.clone().then((clone) => {
+        clone.set({ left: (obj.left || 0) + 32, top:  (obj.top  || 0) + 32 });
+        canvas.add(clone);
+        canvas.setActiveObject(clone);
+        canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+        pushHistory();
+      }).catch((err) => console.error('clone failed:', err));
+    }
+    function rotateObject(obj, deg){
+      obj.rotate((obj.angle || 0) + deg);
+      obj.setCoords();
+      canvas.renderAll();
+    }
+
+    // ===== 削除（複数選択対応・修正版） =====
+    function removeSelected(){
+      const selected = canvas.getActiveObjects(); // v6: 配列で取得
+      if (!selected || !selected.length) return;
+
+      // ActiveSelectionが含まれていても、中身が個別に入るためそのまま削除
+      selected.forEach(o => canvas.remove(o));
+      canvas.discardActiveObject();
+      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+      scheduleAutosave();
+      pushHistory();
+    }
+
+    // ===== イベント =====
+    canvas.on('mouse:move', (evt) => {
+      const p = canvas.getPointer(evt.e);
+      lastPointer = { x: p.x, y: p.y };
+      updateLinePreviewIfNeeded();
+    });
     canvas.upperCanvasEl.addEventListener('dblclick', (domEvt) => {
       const target = canvas.findTarget(domEvt, true);
       if (!target) return;
       editLabelByDblClick(target);
     });
-
     canvas.on('mouse:down', (evt) => {
-      const finalized = finalizeLineDrawingIfNeeded(evt.e);
-      if (finalized) return;
-      if (!evt.target){
-        canvas.discardActiveObject();
-        canvas.renderAll();
-      }
+      if (finalizeLineDrawingIfNeeded(evt.e)) return;
+      if (!evt.target){ canvas.discardActiveObject(); canvas.renderAll(); }
+    });
+    canvas.on('mouse:wheel', (opt) => {
+      const delta = opt.e.deltaY;
+      let z = canvas.getZoom();
+      z *= 0.999**delta;
+      z = Math.min(5,Math.max(0.2, z));
+      canvas.zoomToPoint({x:opt.e.offsetX,y:opt.e.offsetY}, z);
+      opt.e.preventDefault(); opt.e.stopPropagation();
     });
 
-    /**
-     * 選択オブジェクトを取得
-     * @returns {fabric.Object|null}
-     */
-    function getActiveObject(){
-      const active = canvas.getActiveObject();
-      return active || null;
-    }
-
-    /**
-     * キー押下ハンドラ
-     * @param {KeyboardEvent} ev
-     * @returns {void}
-     */
     function handleKeydown(ev){
       const tag = (document.activeElement && document.activeElement.tagName) || '';
       if (tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT') return;
@@ -777,142 +742,145 @@
 
       const keyLower = (ev.key || '').toLowerCase();
       const code = ev.code || '';
-      const active = getActiveObject();
+      const active = canvas.getActiveObject();
+      const isCtrl = ev.ctrlKey || ev.metaKey;
+
+      // Undo/Redo
+      if (isCtrl && keyLower === 'z' && ev.shiftKey){ ev.preventDefault(); redo(); return; }
+      if (isCtrl && keyLower === 'z'){ ev.preventDefault(); undo(); return; }
+
+      // Select All
+      if (isCtrl && (keyLower === 'a' || code === 'KeyA')){
+        ev.preventDefault();
+        const objs = canvas.getObjects();
+        if (objs.length){
+          const sel = new fabric.ActiveSelection(objs, { canvas });
+          canvas.setActiveObject(sel);
+          canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+        }
+        return;
+      }
 
       // 追加
-      if (keyLower==='c' || code==='KeyC'){ ev.preventDefault(); addCircle(); scheduleAutosave(); return; }
-      if (keyLower==='s' || code==='KeyS'){ ev.preventDefault(); addRect();   scheduleAutosave(); return; }
-      if (keyLower==='t' || code==='KeyT'){ ev.preventDefault(); addTextBox(); scheduleAutosave(); return; }
+      if (keyLower==='c' || code==='KeyC'){ ev.preventDefault(); addCircle(); scheduleAutosave(); pushHistory(); return; }
+      if (keyLower==='s' || code==='KeyS'){ ev.preventDefault(); addRect();   scheduleAutosave(); pushHistory(); return; }
+      if (keyLower==='t' || code==='KeyT'){ ev.preventDefault(); addTextBox(); scheduleAutosave(); pushHistory(); return; }
 
-      // 線（a）
+      // 線
       if (keyLower==='a' || code==='KeyA'){ ev.preventDefault(); startLineDrawing(); return; }
       if (keyLower==='escape' || code==='Escape'){ ev.preventDefault(); cancelLinePreview(true); return; }
 
-      if (!active) return;
-
-      // 移動（矢印）
-      const step = ev.shiftKey ? 10 : 1;
-      if (keyLower==='arrowup'){ ev.preventDefault(); nudgeObject(active,0,-step); scheduleAutosave(); return; }
-      if (keyLower==='arrowdown'){ ev.preventDefault(); nudgeObject(active,0, step); scheduleAutosave(); return; }
-      if (keyLower==='arrowleft'){ ev.preventDefault(); nudgeObject(active,-step,0); scheduleAutosave(); return; }
-      if (keyLower==='arrowright'){ ev.preventDefault(); nudgeObject(active, step,0); scheduleAutosave(); return; }
-
-      // 削除
-      if (keyLower==='delete' || keyLower==='backspace'){
-        ev.preventDefault();
-        canvas.remove(active);
-        canvas.discardActiveObject();
-        canvas.renderAll();
-        scheduleAutosave();
-        return;
+      // 移動
+      if (active){
+        const step = ev.shiftKey ? 10 : 1;
+        if (keyLower==='arrowup'){ ev.preventDefault(); nudgeObject(active,0,-step); scheduleAutosave(); pushHistoryDebounced(); return; }
+        if (keyLower==='arrowdown'){ ev.preventDefault(); nudgeObject(active,0, step); scheduleAutosave(); pushHistoryDebounced(); return; }
+        if (keyLower==='arrowleft'){ ev.preventDefault(); nudgeObject(active,-step,0); scheduleAutosave(); pushHistoryDebounced(); return; }
+        if (keyLower==='arrowright'){ ev.preventDefault(); nudgeObject(active, step,0); scheduleAutosave(); pushHistoryDebounced(); return; }
       }
 
-      // 複製
-      if ((ev.ctrlKey || ev.metaKey) && keyLower==='d'){
-        ev.preventDefault();
-        duplicateObject(active);
-        scheduleAutosave();
-        return;
-      }
+      // 複製（Ctrl+D）
+      if (isCtrl && keyLower==='d'){ ev.preventDefault(); duplicateObject(active); scheduleAutosave(); return; }
 
-      // 削除
-      if (keyLower==='d'){
-        ev.preventDefault();
-        canvas.remove(active);
-        canvas.discardActiveObject();
-        canvas.renderAll();
-        scheduleAutosave();
-        return;
-      }
+      // Delete/Backspace
+      if (keyLower==='delete' || keyLower==='backspace'){ ev.preventDefault(); removeSelected(); return; }
+      // d キー（複数選択対応）
+      if (keyLower==='d'){ ev.preventDefault(); removeSelected(); return; }
 
       // Enter: テキスト編集
-      if (keyLower==='enter' || code==='Enter'){
-        ev.preventDefault();
-        editLabelByDblClick(active);
-        scheduleAutosave();
-        return;
-      }
+      if (keyLower==='enter' || code==='Enter'){ ev.preventDefault(); if (active) editLabelByDblClick(active); scheduleAutosave(); pushHistoryDebounced(); return; }
 
-      // Space: 色ローテーション
-      if (keyLower===' ' || keyLower==='spacebar' || code==='Space'){
-        ev.preventDefault();
-        cycleFillColor(active);
-        scheduleAutosave();
-        return;
-      }
+      // Space: 色
+      if (keyLower===' ' || keyLower==='spacebar' || code==='Space'){ ev.preventDefault(); if (active) cycleFillColor(active); scheduleAutosave(); pushHistoryDebounced(); return; }
 
-      // 回転/スケールなど（必要なら追加）
-      if (keyLower==='r'){ ev.preventDefault(); rotateObject(active, ev.shiftKey ? -15 : 15); scheduleAutosave(); return; }
-      if (keyLower==='+'){ ev.preventDefault(); active.set({ scaleX:(active.scaleX||1)* (ev.shiftKey?1.25:1.1), scaleY:(active.scaleY||1)* (ev.shiftKey?1.25:1.1) }); active.setCoords(); canvas.renderAll(); scheduleAutosave(); return; }
-      if (keyLower==='-'){ ev.preventDefault(); active.set({ scaleX:(active.scaleX||1)* (ev.shiftKey?0.8:0.9), scaleY:(active.scaleY||1)* (ev.shiftKey?0.8:0.9) });  active.setCoords(); canvas.renderAll(); scheduleAutosave(); return; }
+      // 回転/スケール
+      if (keyLower==='r'){ ev.preventDefault(); if (active) { rotateObject(active, ev.shiftKey ? -15 : 15); scheduleAutosave(); pushHistoryDebounced(); } return; }
+      if (keyLower==='+'){ ev.preventDefault(); if (active){ active.set({ scaleX:(active.scaleX||1)*(ev.shiftKey?1.25:1.1), scaleY:(active.scaleY||1)*(ev.shiftKey?1.25:1.1) }); active.setCoords(); canvas.renderAll(); scheduleAutosave(); pushHistoryDebounced(); } return; }
+      if (keyLower==='-'){ ev.preventDefault(); if (active){ active.set({ scaleX:(active.scaleX||1)*(ev.shiftKey?0.8:0.9),  scaleY:(active.scaleY||1)*(ev.shiftKey?0.8:0.9)  }); active.setCoords(); canvas.renderAll(); scheduleAutosave(); pushHistoryDebounced(); } return; }
     }
     window.addEventListener('keydown', handleKeydown, true);
 
     // クリックでフォーカス
     document.addEventListener('pointerdown', () => { canvasEl.focus({preventScroll:true}); });
 
-    // Shift + ホイールでスロット切替（上：前へ／下：次へ）
+    // Shift + ホイールでスロット切替
     canvas.upperCanvasEl.addEventListener('wheel', (e) => {
-      if (!e.shiftKey) return;      // Shift が押されている時だけ
-      e.preventDefault();           // ページスクロールを防止
-      const dir = e.deltaY > 0 ? 1 : -1;  // 下回し=次 / 上回し=前
+      if (!e.shiftKey) return;
+      e.preventDefault();
+      const dir = e.deltaY > 0 ? 1 : -1;
       selectSlot(currentSlot + dir);
+      hideSlotPreview();
     }, { passive: false });
 
-
-    // PNG出力：2倍解像度で書き出してダウンロード（倍率は好みに応じて調整可）
+    // PNG出力
     pngBtn.addEventListener('click', () => {
-      const dataURL = canvas.toDataURL({
-        format: 'png',
-        multiplier: 2,        // 2x 解像度
-        enableRetinaScaling: false
-      });
+      const dataURL = canvas.toDataURL({ format:'png', multiplier:2, enableRetinaScaling:false });
       const a = document.createElement('a');
       a.href = dataURL;
       a.download = `canvas-slot${currentSlot+1}.png`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      document.body.appendChild(a); a.click(); a.remove();
     });
 
-    // クリアボタン
+    // 画像挿入
+    imageBtn.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file'; input.accept = 'image/*';
+      input.onchange = () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataURL = String(reader.result || ''); if (!dataURL) return;
+          fabric.Image.fromURL(dataURL, (img) => {
+            const drop = getDropPoint();
+            const maxW = canvas.getWidth()*0.6, maxH = canvas.getHeight()*0.6;
+            const scale = Math.min(1, maxW/img.width, maxH/img.height);
+            img.set({ originX:'center', originY:'center', left:drop.x, top:drop.y, scaleX:scale, scaleY:scale, objectCaching:false });
+            canvas.add(img);
+            canvas.setActiveObject(img);
+            canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+            scheduleAutosave(); pushHistory();
+          }, { crossOrigin: null });
+        };
+        reader.readAsDataURL(file);
+      };
+      input.click();
+    });
+
+    // クリア
     clearBtn.addEventListener('click', () => {
       const ok = window.confirm(`スロット ${currentSlot + 1} の全オブジェクトを削除します。\nこの操作は元に戻せません。よろしいですか？`);
       if (!ok) return;
-      // 全削除 → 背景を白に戻す → 保存
       canvas.clear();
       setCanvasBg('#ffffff');
       saveToSlot(currentSlot);
+      resetHistoryBaseline();
     });
 
-    // JSONインポート（選択中スロットを全削除→インポート→自動保存）
+    // JSON入出力
     importBtn.addEventListener('click', () => {
       const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'application/json';
+      input.type = 'file'; input.accept = 'application/json';
       input.onchange = () => {
         const file = input.files && input.files[0];
         if (!file) return;
         const reader = new FileReader();
         reader.onload = () => {
           try{
-            // 既存を破棄してから読み込み
-            canvas.clear();
-            setCanvasBg('#ffffff');
+            canvas.clear(); setCanvasBg('#ffffff');
+            applyingHistory = true;
             importCanvasJSON(String(reader.result), () => {
-              // スロットにも保存
+              applyingHistory = false;
               saveToSlot(currentSlot);
+              resetHistoryBaseline();
+              refreshSlotButtonsUI();
             });
-          }catch(e){
-            console.error('import failed:', e);
-          }
+          }catch(e){ console.error('import failed:', e); }
         };
         reader.readAsText(file);
       };
       input.click();
     });
-
-    // --- エクスポートボタン（JSON ダウンロード） ---
     exportBtn.addEventListener('click', () => {
       const json = exportCanvasJSON();
       const blob = new Blob([json], { type:'application/json' });
@@ -920,23 +888,20 @@
       const a = document.createElement('a');
       a.href = url;
       a.download = `canvas-export-slot${currentSlot+1}.json`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
     });
 
-    // --- 初期化：スロットボタン作成 → Canvas サイズ調整 → 起動時にスロット1を復元 ---
+    // 初期化
     buildSlotButtons();
     resizeCanvasToViewport();
     currentSlot = 0;
     refreshSlotButtonsUI();
-    loadFromSlot(currentSlot);   // ページを開いたら一番先頭のスロットを自動復元
+    loadFromSlot(currentSlot);
     canvasEl.focus({preventScroll:true});
+    resetHistoryBaseline();
+
   })();
   </script>
-
-
-
 </body>
 </html>
