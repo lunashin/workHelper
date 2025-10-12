@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <title>Fabric.js 図形作成ツール（Undo/Redo・スロット改良・複数削除）</title>
+  <title>Fabric.js 図形作成ツール（保守性向上版）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root{
@@ -14,7 +14,7 @@
       --slotEmptyBg:#f1f5f9;
       --slotEmptyTxt:#94a3b8;
       /* データあり（淡いオレンジ） */
-      --slotHasBg:#fff1e6; /* very light orange */
+      --slotHasBg:#fff1e6;
       --slotHasBorder:#f59e0b;
       --slotHasTxt:#9a3412;
     }
@@ -25,7 +25,7 @@
     #stage{display:block;outline:none;background:#fff;}
     .upper-canvas{background: transparent !important;}
 
-    /* スロットツールバー */
+    /* ツールバー */
     #toolbar{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:#fafbff;flex-wrap:wrap;}
     .slot-btn{
       min-width:38px;padding:6px 10px;border:1px solid #cfd6e3;border-radius:8px;
@@ -33,7 +33,7 @@
       transition:background .15s ease,border-color .15s ease,color .15s ease;
     }
     .slot-btn.active{
-      border-color:var(--slotSel);box-shadow:0 0 0 4px rgba(233, 14, 14, 0.685) inset;color:var(--slotSel);background:#e8f6fd;
+      border-color:var(--slotSel);box-shadow:0 0 0 2px rgba(14,165,233,.2) inset;color:var(--slotSel);background:#e8f6fd;
     }
     .slot-btn.empty{
       background:var(--slotEmptyBg);color:var(--slotEmptyTxt);border-style:dashed;
@@ -94,10 +94,46 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/671/index.min.js"></script>
   <script>
   (function(){
-    // Debug
-    const DEBUG = true;
-    const D = (...a) => DEBUG && console.log('[thumb]', ...a);
+    // =========================
+    // 開発支援用ログ
+    // =========================
+    const DEBUG = false;
+    const D = (...a) => DEBUG && console.log('[dbg]', ...a);
 
+    // =========================
+    // 共通定数（“魔法数”の排除）
+    // =========================
+    // プレビュー画像サイズ
+    const PREVIEW_W = 280;
+    const PREVIEW_H = 180;
+    // サムネイルの外接矩形フィット用パディング
+    const FIT_PAD = 12;
+    // 更新日バッジの描画スタイル
+    const BADGE_FONT = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+    const BADGE_PAD_X = 8;
+    const BADGE_PAD_Y = 6;
+    const BADGE_RADIUS = 8;
+    const BADGE_MARGIN = 8;
+    const BADGE_BG = 'rgba(255,255,255,0.92)';
+    const BADGE_BORDER = 'rgba(0,0,0,0.15)';
+    const BADGE_TEXT = '#334155';
+    // スロット数
+    const SLOT_COUNT = 10;
+    // LocalStorage キー
+    const LS_KEY_PREFIX = 'wb_slot_v1_';
+    const LS_KEY_META_PREFIX = 'wb_slot_v1_meta_';
+    // オートセーブ
+    const AUTOSAVE_DELAY = 300;
+    // ズーム制御
+    const ZOOM_MIN = 0.2;
+    const ZOOM_MAX = 5;
+    const ZOOM_WHEEL_FACTOR = 0.999;
+    // Undo/Redo 履歴件数
+    const HISTORY_LIMIT = 50;
+
+    // =========================
+    // DOM 参照
+    // =========================
     const canvasEl = document.getElementById('stage');
     const headerEl = document.getElementById('header');
     const toolbarEl = document.getElementById('toolbar');
@@ -107,17 +143,24 @@
     const importBtn = document.getElementById('importBtn');
     const clearBtn  = document.getElementById('clearBtn');
     const pngBtn    = document.getElementById('pngBtn');
-
     const slotPreviewEl = document.getElementById('slotPreview');
     const slotPreviewImg = slotPreviewEl.querySelector('img');
     const slotPreviewCaption = slotPreviewEl.querySelector('.caption');
 
+    // =========================
+    // Fabric Canvas 初期化
+    // =========================
     const canvas = new fabric.Canvas(canvasEl, {
       backgroundColor: '#ffffff',
       selection: true,
       preserveObjectStacking: true
     });
 
+    /**
+     * Fabric のグリップ/枠線の見た目を初期設定する。
+     * 引数/戻り値なし（副作用：fabric.Object.prototype を変更）
+     */
+    // ---- 選択ハンドルのテーマ設定 ----
     fabric.Object.prototype.transparentCorners = false;
     fabric.Object.prototype.cornerColor = '#0ea5e9';
     fabric.Object.prototype.cornerStyle = 'rect';
@@ -125,52 +168,78 @@
     fabric.Object.prototype.borderColor = '#0ea5e9';
 
     // カラーパレット
-    const color_palette = ['#60a5fa','#22c55e','#f59e0b','#ef4444','#a78bfa', "#ffffff", "#000000"];
+    const color_palette = ['#60a5fa','#22c55e','#f59e0b','#ef4444','#a78bfa', '#ffffff', '#000000'];
 
     // 図形作成時の既定パラメータ
     const line_param = { stroke:'#111827', strokeWidth:3, strokeLineCap:'round' };
     const arrow_param = { width:32, height:32, fill:'#111827', stroke:'#111827', strokeWidth:2, originX:'center', originY:'center' };
 
+    /**
+     * ビューポートに合わせて Canvas のピクセルサイズを追従させる。
+     * 引数なし / 戻り値なし（canvas に副作用）
+     */
     function resizeCanvasToViewport(){
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       const hh = Math.ceil(headerEl.getBoundingClientRect().height);
       const th = Math.ceil(toolbarEl.getBoundingClientRect().height);
+      // ---- レイアウト計算 ----
       canvas.setWidth(vw);
-      canvas.setHeight(Math.max(0, vh - hh - th));
+      const usableHeight = Math.max(0, vh - hh - th);
+      canvas.setHeight(usableHeight);
       canvas.calcOffset();
-      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+      const render = canvas.requestRenderAll || canvas.renderAll;
+      render.call(canvas);
     }
     window.addEventListener('resize', resizeCanvasToViewport, { passive:true });
 
     let lastPointer = null;
+    /**
+     * 直近のマウス位置（なければキャンバス中央）を返す。
+     * @returns {{x:number,y:number}} ドロップ配置の基準点
+     */
     function getDropPoint(){
       if (lastPointer) return lastPointer;
       return { x: canvas.getWidth()/2, y: canvas.getHeight()/2 };
     }
 
-    // ===== スロット機能 =====
-    const SLOT_COUNT = 10;
-    const LS_KEY_PREFIX = 'wb_slot_v1_';
-    const LS_KEY_META_PREFIX = 'wb_slot_v1_meta_';  // スロット毎の視点メタデータ保存用（ズーム/右上ワールド座標）
+    // =========================
+    // スロット機能
+    // =========================
+    // ※ 視点メタデータ（ズーム/右上ワールド座標/updatedAt）は LS_KEY_META_PREFIX に保存
     let currentSlot = 0;
     let autosaveTimer = null;
 
+    /**
+     * 現在のキャンバス内容を Fabric JSON 文字列として返す。
+     * @returns {string} JSON 文字列
+     */
     function exportCanvasJSON(){
       const json = canvas.toJSON();
       return JSON.stringify(json, null, 2);
     }
+    /**
+     * Fabric JSON 文字列を読み込み、キャンバスへ反映する。
+     * @param {string} jsonText - Fabric JSON 文字列
+     * @param {Function} [cb] - 読み込み完了後に呼ばれるコールバック
+     * @returns {void}
+     */
     function importCanvasJSON(jsonText, cb){
       try{
         const parsed = JSON.parse(jsonText);
         canvas.loadFromJSON(parsed, () => {
           attachGroupLabelPointers();
-          canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+          const render = canvas.requestRenderAll || canvas.renderAll;
+          render.call(canvas);
           canvasEl.focus({preventScroll:true});
           cb && cb();
         });
       }catch(err){ console.error('loadFromJSON failed:', err); }
     }
+    /**
+     * グループ内のラベル(Text)への参照を付与し、中央へ配置し直す。
+     * @returns {void}
+     */
     function attachGroupLabelPointers(){
       for (const obj of canvas.getObjects()){
         if (obj.type === 'group' && obj._objects){
@@ -180,14 +249,24 @@
         }
       }
     }
+    /**
+     * 現在のスロットへキャンバス JSON を保存し、視点メタも保存する。
+     * （updatedAt は編集時のみ更新。ズーム時は更新しない）
+     * @param {number} slot - 保存先スロット番号
+     */
     function saveToSlot(slot){
       try{
         const key = LS_KEY_PREFIX + slot;
         localStorage.setItem(key, exportCanvasJSON());
-        saveViewportMeta(slot); // 視点メタも一緒に保存
+        // ---- 視点メタも一緒に保存（最終更新日時は編集時のみ更新）----
+        saveViewportMeta(slot);
         refreshSlotButtonsUI();
       }catch(err){ console.error('saveToSlot failed:', err); }
     }
+    /**
+     * スロットからキャンバス JSON を読み込み、視点メタを復元する。
+     * @param {number} slot - 読み込み元スロット番号
+     */
     function loadFromSlot(slot){
       const key = LS_KEY_PREFIX + slot;
       const json = localStorage.getItem(key);
@@ -196,16 +275,26 @@
         setCanvasBg('#ffffff');
         return;
       }
-      // importCanvasJSON(json);
       importCanvasJSON(json, () => {
-        applyViewportFromMeta(slot);  // 視点メタを復元（あれば）
+        // ---- 視点メタを復元（あれば）----
+        applyViewportFromMeta(slot);
       });
     }
+    /**
+     * キャンバス背景色を設定して再描画。
+     * @param {string} color - CSS 色
+     */
     function setCanvasBg(color){
       canvas.backgroundColor = color;
-      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+      const render = canvas.requestRenderAll || canvas.renderAll;
+      render.call(canvas);
     }
 
+    /**
+     * 指定スロットにオブジェクトが1つ以上あるか判定する。
+     * @param {number} i - スロット番号
+     * @returns {boolean} true: データあり / false: 空
+     */
     function slotHasData(i){
       const storage_data = localStorage.getItem(LS_KEY_PREFIX + i);
       if (!!storage_data) {
@@ -215,20 +304,33 @@
       return false;
     }
 
-    // ===== ビューポート保存/復元ユーティリティ =====
-    // 画面上の (screenX, screenY) に対応するワールド座標を取得
+    // =========================
+    // ビューポート保存/復元ユーティリティ
+    // =========================
+    /**
+     * 画面上の (screenX, screenY) に対応するワールド座標を取得する。
+     * @param {number} screenX
+     * @param {number} screenY
+     * @returns {{x:number,y:number}}
+     */
     function getWorldPointAtScreen(screenX, screenY){
       const vt = canvas.viewportTransform || [1,0,0,1,0,0];
       const inv = fabric.util.invertTransform(vt);
       const p = fabric.util.transformPoint(new fabric.Point(screenX, screenY), inv);
       return { x: p.x, y: p.y };
     }
-    // 現在のズームと「画面右上に来ているワールド座標」を保存
-    // options.touchUpdatedAt === false の時は updatedAt を変更しない
+    /**
+     * 現在のズームと「画面右上に来ているワールド座標」を保存する。
+     * options.touchUpdatedAt === false の時は updatedAt を変更しない（ズーム操作時など）
+     * @param {number} slot - 保存先スロット番号
+     * @param {{touchUpdatedAt?:boolean}} [options]
+     * @returns {void}
+     */
     function saveViewportMeta(slot, { touchUpdatedAt = true } = {}){
       try{
         const zoom = canvas.getZoom();
-        const viewTR = getWorldPointAtScreen(canvas.getWidth(), 0); // 右上は (canvas.width, 0) のスクリーン座標
+        // ---- 右上は (canvas.width, 0) のスクリーン座標 ----
+        const viewTR = getWorldPointAtScreen(canvas.getWidth(), 0);
         // 既存の updatedAt を引き継ぐ（touchUpdatedAt=false の場合）
         let prevUpdated = null;
         try {
@@ -240,7 +342,11 @@
         localStorage.setItem(LS_KEY_META_PREFIX + slot, JSON.stringify(meta));
       }catch(e){ console.warn('saveViewportMeta failed:', e); }
     }
-    // 保存済みの視点メタを取得
+    /**
+     * 保存済みの視点メタを取得する。
+     * @param {number} slot
+     * @returns {{zoom:number, viewTR:{x:number,y:number}, updatedAt?:string}|null}
+     */
     function readViewportMeta(slot){
       try{
         const raw = localStorage.getItem(LS_KEY_META_PREFIX + slot);
@@ -250,7 +356,11 @@
         return parsed;
       }catch(e){ return null; }
     }
-    // メタに基づき viewportTransform を再設定
+    /**
+     * メタ情報に基づき viewportTransform を再設定する。
+     * @param {number} slot
+     * @returns {void}
+     */
     function applyViewportFromMeta(slot){
       const meta = readViewportMeta(slot);
       if (!meta) return;
@@ -258,15 +368,15 @@
       if (!z || z <= 0) return;
       const vx = meta.viewTR?.x ?? 0;
       const vy = meta.viewTR?.y ?? 0;
-      // 右上 (screenW, 0) が (vx, vy) に一致するように並進を求める:
-      // [ z 0 0 z e f ] * [vx, vy, 1]^T のスクリーンX = screenW, Y = 0
-      // => e = screenW - z*vx, f = 0 - z*vy
+      // 右上 (screenW, 0) が (vx, vy) に一致するように
       const e = canvas.getWidth() - z * vx;
       const f = 0 - z * vy;
       canvas.setViewportTransform([ z, 0, 0, z, e, f ]);
-      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+      const render = canvas.requestRenderAll || canvas.renderAll;
+      render.call(canvas);
     }
 
+    /** スロットボタンの状態をデータ有無や選択中で更新する。 */
     function refreshSlotButtonsUI(){
       const btns = slotButtonsEl.querySelectorAll('.slot-btn');
       btns.forEach((btn, idx) => {
@@ -277,6 +387,10 @@
       });
     }
 
+    /**
+     * スロットを選択し、内容と視点を読み込む。
+     * @param {number} i - スロット番号
+     */
     function selectSlot(i){
       currentSlot = Math.max(0, Math.min(SLOT_COUNT-1, i));
       refreshSlotButtonsUI();
@@ -284,10 +398,14 @@
       loadFromSlot(currentSlot);
       applyingHistory = false;
       resetHistoryBaseline();
-      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+      const render = canvas.requestRenderAll || canvas.renderAll;
+      render.call(canvas);
       canvasEl.focus({preventScroll:true});
     }
 
+    /**
+     * スロットボタンを生成し、クリック/プレビューのイベントを付与する。
+     */
     function buildSlotButtons(){
       slotButtonsEl.innerHTML = '';
       for (let i=0; i<SLOT_COUNT; i++){
@@ -300,60 +418,67 @@
 
         btn.addEventListener('click', () => selectSlot(i));
 
-        // Shift+ホバーでプレビュー
-        // btn.addEventListener('pointerenter', (e) => { hoveredSlot = i; lastHoverEvent = e; reevaluateSlotPreview(); });
-        // btn.addEventListener('pointermove',  (e) => { hoveredSlot = i; lastHoverEvent = e; reevaluateSlotPreview(); positionSlotPreview(e); });
-        // btn.addEventListener('pointerleave', () => { hoveredSlot = null; hideSlotPreview(); });
+        // Shift+ホバー プレビュー
         btn.addEventListener('pointerenter', (e) => {
-          hoveredSlot = i;
-          lastHoverEvent = e;
-          if (e.shiftKey) showSlotPreview(i, e);
-          else hideSlotPreview();
+          hoveredSlot = i; lastHoverEvent = e;
+          if (e.shiftKey) showSlotPreview(i, e); else hideSlotPreview();
         });
         btn.addEventListener('pointermove', (e) => {
-          hoveredSlot = i;
-          lastHoverEvent = e;
-          if (e.shiftKey) showSlotPreview(i, e);
-          else hideSlotPreview();
+          hoveredSlot = i; lastHoverEvent = e;
+          if (e.shiftKey) showSlotPreview(i, e); else hideSlotPreview();
         });
-        btn.addEventListener('pointerleave', () => {
-          hoveredSlot = null;
-          hideSlotPreview();
-        });
+        btn.addEventListener('pointerleave', () => { hoveredSlot = null; hideSlotPreview(); });
 
         slotButtonsEl.appendChild(btn);
       }
       refreshSlotButtonsUI();
     }
 
+    /**
+     * オートセーブを遅延実行でスケジュールする。
+     */
     function scheduleAutosave(){
       clearTimeout(autosaveTimer);
-      autosaveTimer = setTimeout(() => saveToSlot(currentSlot), 300);
+      autosaveTimer = setTimeout(() => {
+        saveToSlot(currentSlot);
+      }, AUTOSAVE_DELAY);
     }
 
-    // 変更イベント→自動保存 & 履歴
-    // ['object:added','object:removed','object:modified','object:scaled','object:rotated','object:moved'].forEach(evt=>{
+    // =========================
+    // 変更イベント → 自動保存 & 履歴
+    // =========================
     ['object:modified','object:scaled','object:rotated','object:moved'].forEach(evt=>{
       canvas.on(evt, () => { scheduleAutosave(); pushHistoryDebounced(); });
     });
 
-    // ===== Undo/Redo =====
-    const HISTORY_LIMIT = 50;
+    // =========================
+    // Undo / Redo
+    // =========================
     const historyStack = [];
     const redoStack = [];
     let applyingHistory = false;
     let historyTimer = null;
 
+    /**
+     * 現在のキャンバス状態スナップショット（JSON文字列）を取得。
+     * @returns {string}
+     */
     function getCanvasSnapshot(){ return exportCanvasJSON(); }
+    /**
+     * スナップショットをキャンバスへ適用する。
+     * @param {string} json - JSON 文字列
+     */
     function applySnapshot(json){
       applyingHistory = true;
       canvas.clear();
       setCanvasBg('#ffffff');
       importCanvasJSON(json, () => {
         applyingHistory = false;
-        canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+        const render = canvas.requestRenderAll || canvas.renderAll;
+        render.call(canvas);
       });
     }
+    /** 履歴に現在スナップショットを積む（重複は抑止） */
     function pushHistory(){
       if (applyingHistory) return;
       const snap = getCanvasSnapshot();
@@ -362,14 +487,27 @@
       if (historyStack.length > HISTORY_LIMIT) historyStack.shift();
       redoStack.length = 0;
     }
+    /** 短時間の改変を 1 つにまとめるためのデバウンス push */
     function pushHistoryDebounced(){
       if (applyingHistory) return;
       clearTimeout(historyTimer);
       historyTimer = setTimeout(() => pushHistory(), 200);
     }
+
+    /**
+     * 履歴のベースラインを再作成する。
+     * - undo/redo スタックをクリア
+     * - 現在状態のスナップショットを 1 件だけ積む
+     * @returns {void}
+     */
     function resetHistoryBaseline(){
-      historyStack.length = 0; redoStack.length = 0; pushHistory();
+      // 既存の履歴を破棄
+      historyStack.length = 0;
+      redoStack.length = 0;
+      pushHistory(); // 現在の状態をベースラインとして登録
     }
+
+    /** Undo 操作 */
     function undo(){
       if (historyStack.length <= 1) return;
       const cur = historyStack.pop();
@@ -377,6 +515,7 @@
       redoStack.push(cur);
       applySnapshot(prev);
     }
+    /** Redo 操作 */
     function redo(){
       if (!redoStack.length) return;
       const next = redoStack.pop();
@@ -384,45 +523,45 @@
       applySnapshot(next);
     }
 
-    // ===== サムネプレビュー =====
+    // =========================
+    // サムネプレビュー
+    // =========================
     const slotThumbCache = new Map(); // cacheKey(slotIndex|updatedAt) -> dataURL
     let hoveredSlot = null;
     let lastHoverEvent = null;
     let shiftHeld = false;
 
-    // function hideSlotPreview(){ slotPreviewEl.style.display = 'none'; }
-    // スロットボタン上に表示するプレビューを消去
+    /** スロットボタン上に表示するプレビューを消去 */
     function hideSlotPreview(){
       slotPreviewEl.style.display = 'none';
       // 古いサムネが残るのを防止
       slotPreviewImg.removeAttribute('src');
     }
-
+    /**
+     * プレビューの表示位置をマウス座標に合わせて更新する。
+     * @param {PointerEvent|MouseEvent} e
+     */
     function positionSlotPreview(e){
       if (!e) return;
       slotPreviewEl.style.left = e.clientX + 'px';
       slotPreviewEl.style.top  = e.clientY + 'px';
     }
 
-    function reevaluateSlotPreview(){
-      if (hoveredSlot === null || !shiftHeld){ hideSlotPreview(); return; }
-      if (!slotHasData(hoveredSlot)){ hideSlotPreview(); return; }
-
-      const e = lastHoverEvent;
-      if (e) positionSlotPreview(e);
-      // 以降の表示は showSlotPreview に委譲（更新日入り）
-      showSlotPreview(hoveredSlot, e);
-    }
-
-    // Shiftの押下状態でプレビュー再評価（「あと押し」に対応）
+    // Shift “後押し”にも対応
     window.addEventListener('keydown', (e) => {
-      if (e.key === 'Shift'){ shiftHeld = true; reevaluateSlotPreview(); }
+      if (e.key === 'Shift'){ shiftHeld = true; if (hoveredSlot!==null) showSlotPreview(hoveredSlot, lastHoverEvent||e); }
     }, true);
     window.addEventListener('keyup', (e) => {
       if (e.key === 'Shift'){ shiftHeld = false; hideSlotPreview(); }
     }, true);
 
-    // スロットボタン上のプレビューを表示
+    /**
+     * スロットボタン上のプレビューを表示する。
+     * - サムネはキャッシュ（slotIndex|updatedAt）を利用
+     * - 未キャッシュ時は生成してから表示
+     * @param {number} slotIndex
+     * @param {PointerEvent|MouseEvent} e
+     */
     function showSlotPreview(slotIndex, e){
       if (!slotHasData(slotIndex)) { hideSlotPreview(); return; }
 
@@ -432,7 +571,6 @@
       slotPreviewImg.removeAttribute('src'); // 古い残像を消す
       slotPreviewEl.style.display = 'block';
 
-      // const cached = slotThumbCache.get(slotIndex);
       // 保存データとメタ（更新日時）を取得
       const json = localStorage.getItem(LS_KEY_PREFIX + slotIndex);
       const metaRaw = localStorage.getItem(LS_KEY_META_PREFIX + slotIndex);
@@ -440,19 +578,16 @@
       try { updatedAt = metaRaw ? (JSON.parse(metaRaw).updatedAt || null) : null; } catch(_){}
       const cacheKey = `${slotIndex}|${updatedAt || 'none'}`;
 
+      // ---- キャッシュがあれば即表示 ----
       const cached = slotThumbCache.get(cacheKey);
-
       if (cached){
         slotPreviewImg.src = cached;
         return; // 既に枠は表示済み
       }
-      // const json = localStorage.getItem(LS_KEY_PREFIX + slotIndex);
       if (!json){ hideSlotPreview(); return; }
 
       // ベースのサムネを生成後、更新日バッジを重ね描き
-      // generateThumbnailFromJSON(json, 280, 180).then((dataURL) => {
-      //   slotThumbCache.set(slotIndex, dataURL);
-      generateThumbnailWithUpdatedAt(json, updatedAt, 280, 180).then((dataURL) => {
+      generateThumbnailWithUpdatedAt(json, updatedAt, PREVIEW_W, PREVIEW_H).then((dataURL) => {
         slotThumbCache.set(cacheKey, dataURL);
         // すでに枠は出ているので src を付け替えるだけ
         slotPreviewImg.src = dataURL;
@@ -461,8 +596,15 @@
       });
     }
 
-    // 既存の generateThumbnailFromJSON を利用し、上に「最終更新」ラベルを描画して返す
-    async function generateThumbnailWithUpdatedAt(jsonText, updatedAtISO, w=280, h=180){
+    /**
+     * 既存のサムネ生成結果へ「最終更新」バッジを重ねて返す。
+     * @param {string} jsonText - Fabric JSON 文字列
+     * @param {string|null} updatedAtISO - ISO 形式の更新日時
+     * @param {number} [w=PREVIEW_W]
+     * @param {number} [h=PREVIEW_H]
+     * @returns {Promise<string>} dataURL
+     */
+    async function generateThumbnailWithUpdatedAt(jsonText, updatedAtISO, w=PREVIEW_W, h=PREVIEW_H){
       const baseURL = await generateThumbnailFromJSON(jsonText, w, h);
       // 合成用キャンバス
       const c = document.createElement('canvas');
@@ -478,22 +620,25 @@
       return c.toDataURL('image/png');
     }
 
-    // スロットボタン上にポップアップ表示するサムネイルを生成
-    // @note : v6の Promise 返却に対応。旧版（callback）でも自動フォールバックします。
-    async function generateThumbnailFromJSON(jsonText, targetW = 280, targetH = 180) {
+    /**
+     * スロットボタン上にポップアップ表示するサムネイルを生成する。
+     * v6 の Promise 返却に対応。旧版（callback）でも自動フォールバック。
+     * @param {string|object} jsonText - Fabric JSON（文字列 or オブジェクト）
+     * @param {number} [targetW=PREVIEW_W]
+     * @param {number} [targetH=PREVIEW_H]
+     * @returns {Promise<string>} dataURL
+     */
+    async function generateThumbnailFromJSON(jsonText, targetW = PREVIEW_W, targetH = PREVIEW_H) {
       return new Promise(async (resolve, reject) => {
         try {
-          // 実体の <canvas> を使う（nullを渡さない）
+          // ---- オフスクリーン StaticCanvas 準備（null は渡さない）----
           const offscreen = document.createElement('canvas');
           offscreen.width = targetW;
           offscreen.height = targetH;
 
           const sc = new fabric.StaticCanvas(offscreen, {
-            width: targetW,
-            height: targetH,
-            backgroundColor: '#ffffff',
-            enableRetinaScaling: false,
-            renderOnAddRemove: false
+            width: targetW, height: targetH, backgroundColor: '#ffffff',
+            enableRetinaScaling: false, renderOnAddRemove: false
           });
 
           const parsed = (typeof jsonText === 'string') ? JSON.parse(jsonText) : jsonText;
@@ -508,20 +653,17 @@
             return resolve(offscreen.toDataURL('image/png'));
           }
 
-          // 画像対策
+          // 画像対策 reviver
           const reviver = (orig, obj) => {
             if (obj && obj.type === 'image' && !obj.crossOrigin) obj.crossOrigin = 'anonymous';
           };
 
-          // v6: Promise 返却 / 旧版: callback の両対応
+          // v6: Promise / 旧版: callback 両対応
           let enlivened;
           const maybePromise = fabric.util.enlivenObjects(objsRaw, { reviver });
-
           if (maybePromise && typeof maybePromise.then === 'function') {
-            // v6: Promise
             enlivened = await maybePromise;
           } else {
-            // 旧版: callback シグネチャにフォールバック
             return fabric.util.enlivenObjects(
               objsRaw,
               (arr) => {
@@ -537,7 +679,6 @@
             );
           }
 
-          // 以降 v6
           enlivened.forEach(o => sc.add(o));
           sc.renderAll();
 
@@ -549,7 +690,13 @@
         }
       });
 
-      // 内部: 外接矩形にフィットさせて PNG を返す
+      /**
+       * 内部ヘルパー: 外接矩形にフィットさせて PNG を返す。
+       * @param {fabric.StaticCanvas} sc
+       * @param {number} targetW
+       * @param {number} targetH
+       * @returns {string} dataURL
+       */
       function _fitAndSnapshot(sc, targetW, targetH) {
         const objs = sc.getObjects();
         if (!objs.length) {
@@ -564,7 +711,7 @@
           maxX = Math.max(maxX, br.left + br.width);
           maxY = Math.max(maxY, br.top  + br.height);
         }
-        const pad = 12;
+        const pad = FIT_PAD;
         const contentW = Math.max(1, (maxX - minX));
         const contentH = Math.max(1, (maxY - minY));
         const sx = (targetW - pad * 2) / contentW;
@@ -581,32 +728,49 @@
       }
     }
 
-
-
-    // === 更新日描画ユーティリティ ===
+    // =========================
+    // 更新日描画ユーティリティ
+    // =========================
+    /**
+     * プレビュー画像の右下に「最終更新: yyyy/MM/dd hh:mm」バッジを描画。
+     * @param {HTMLCanvasElement} canvasEl
+     * @param {string|null} updatedAtISO
+     */
     function drawUpdatedAtBadge(canvasEl, updatedAtISO){
       const ctx = canvasEl.getContext('2d');
       const text = '最終更新: ' + formatDateLabel(updatedAtISO);
-      ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-      const padX = 8, padY = 6;
+      ctx.font = BADGE_FONT;
+      const padX = BADGE_PAD_X;
+      const padY = BADGE_PAD_Y;
       // 影響が少ないように事前にメジャー
       const metrics = ctx.measureText(text);
-      const w = metrics.width + padX*2;
-      const h = 18 + padY*2;
-      const x = canvasEl.width - w - 8;
-      const y = canvasEl.height - h - 8;
+      const w = metrics.width + padX * 2;
+      const h = 18 + padY * 2;
+      const x = canvasEl.width  - w - BADGE_MARGIN;
+      const y = canvasEl.height - h - BADGE_MARGIN;
 
       // 背景（角丸・白半透明）
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      roundRect(ctx, x, y, w, h, 8); ctx.fill();
+      ctx.fillStyle = BADGE_BG;
+      roundRect(ctx, x, y, w, h, BADGE_RADIUS);
+      ctx.fill();
       // 枠線
-      ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+      ctx.strokeStyle = BADGE_BORDER;
       ctx.lineWidth = 1;
-      roundRect(ctx, x, y, w, h, 8); ctx.stroke();
+      roundRect(ctx, x, y, w, h, BADGE_RADIUS);
+      ctx.stroke();
       // 文字
-      ctx.fillStyle = '#334155';
+      ctx.fillStyle = BADGE_TEXT;
       ctx.fillText(text, x + padX, y + padY + 13);
     }
+    /**
+     * 角丸矩形パスを生成する。
+     * @param {CanvasRenderingContext2D} ctx
+     * @param {number} x
+     * @param {number} y
+     * @param {number} w
+     * @param {number} h
+     * @param {number} r
+     */
     function roundRect(ctx, x, y, w, h, r){
       const rr = Math.min(r, w/2, h/2);
       ctx.beginPath();
@@ -617,6 +781,11 @@
       ctx.arcTo(x, y, x+w, y, rr);
       ctx.closePath();
     }
+    /**
+     * ISO 文字列を「yyyy/MM/dd hh:mm」に整形する。
+     * @param {string|null} iso
+     * @returns {string}
+     */
     function formatDateLabel(iso){
       if (!iso) return '(不明)';
       const d = new Date(iso);
@@ -629,7 +798,9 @@
       return `${y}/${m}/${dd} ${hh}:${mm}`;
     }
 
-    // ===== 既存描画（要点） =====
+    // =========================
+    // 既存描画（要点）
+    // =========================
     const groupOptions = { hasControls:true, hoverCursor:'move', originX:'left', originY:'top', opacity:1, objectCaching:false };
 
     function centerGroupLabel(group){
@@ -642,7 +813,6 @@
       group._label.set({ originX:'center', originY:'center', left:centerLocal.x, top:centerLocal.y, textAlign:'center' });
       group.setCoords();
     }
-
     function createLabeledGroup(baseObjects){
       const dropPoint = getDropPoint();
       const labelText = new fabric.Text('', { fontSize:16, fill:'#0f172a', originX:'center', originY:'center', top:0, left:0, textAlign:'center', objectCaching:false });
@@ -653,7 +823,8 @@
       centerGroupLabel(group);
       canvas.setActiveObject(group);
       if (canvas.bringToFront) canvas.bringToFront(group);
-      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+      const render = canvas.requestRenderAll || canvas.renderAll;
+      render.call(canvas);
       return group;
     }
     function addCircle(){
@@ -671,7 +842,8 @@
       const tb = new fabric.Textbox(nextText, { left: drop.x, top: drop.y, fontSize:18, fill:'#0f172a', textAlign:'left', objectCaching:false });
       canvas.add(tb);
       canvas.setActiveObject(tb);
-      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+      const render = canvas.requestRenderAll || canvas.renderAll;
+      render.call(canvas);
     }
 
     // 線
@@ -682,7 +854,6 @@
     function startLineDrawing(){
       const start = getDropPoint();
       pendingLineStart = { x: start.x, y: start.y };
-
       if (previewLine) { canvas.remove(previewLine); previewLine = null; }
       if (previewLineArrowHead) { canvas.remove(previewLineArrowHead); previewLineArrowHead = null; }
 
@@ -700,9 +871,7 @@
       canvas.bringToFront && canvas.bringToFront(previewLine);
       canvas.renderAll();
     }
-    function calcurateArrowDegree(x1, y1, x2, y2) {
-      return Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
-    }
+    function calcurateArrowDegree(x1, y1, x2, y2) { return Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI; }
     function updateLinePreviewIfNeeded(){
       if (!pendingLineStart || !previewLine) return;
       const pos = getDropPoint();
@@ -758,7 +927,9 @@
       if (render) canvas.renderAll();
     }
 
-    // ===== ユーティリティ =====
+    // =========================
+    // 操作ユーティリティ
+    // =========================
     function cycleFillColor(obj){
       let target = obj;
       if (obj && obj.type === 'group' && obj._objects && obj._objects.length){
@@ -805,7 +976,8 @@
         clone.set({ left: (obj.left || 0) + 32, top:  (obj.top  || 0) + 32 });
         canvas.add(clone);
         canvas.setActiveObject(clone);
-        canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+        const render = canvas.requestRenderAll || canvas.renderAll;
+        render.call(canvas);
         pushHistory();
       }).catch((err) => console.error('clone failed:', err));
     }
@@ -815,20 +987,23 @@
       canvas.renderAll();
     }
 
-    // ===== 削除（複数選択対応・修正版） =====
+    // =========================
+    // 削除（複数選択対応）
+    // =========================
     function removeSelected(){
-      const selected = canvas.getActiveObjects(); // v6: 配列で取得
+      const selected = canvas.getActiveObjects();
       if (!selected || !selected.length) return;
-
-      // ActiveSelectionが含まれていても、中身が個別に入るためそのまま削除
       selected.forEach(o => canvas.remove(o));
       canvas.discardActiveObject();
-      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+      const render = canvas.requestRenderAll || canvas.renderAll;
+      render.call(canvas);
       scheduleAutosave();
       pushHistory();
     }
 
-    // ===== イベント =====
+    // =========================
+    // イベント
+    // =========================
     canvas.on('mouse:move', (evt) => {
       const p = canvas.getPointer(evt.e);
       lastPointer = { x: p.x, y: p.y };
@@ -846,11 +1021,12 @@
     canvas.on('mouse:wheel', (opt) => {
       const delta = opt.e.deltaY;
       let z = canvas.getZoom();
-      z *= 0.999**delta;
-      z = Math.min(5,Math.max(0.2, z));
+      // ---- ホイール倍率更新 ----
+      z *= Math.pow(ZOOM_WHEEL_FACTOR, delta);
+      z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
       canvas.zoomToPoint({x:opt.e.offsetX,y:opt.e.offsetY}, z);
       opt.e.preventDefault(); opt.e.stopPropagation();
-      // ★ ズーム時は拡大率/右上ワールド座標のみ保存（updatedAtは変更しない）
+      // ズーム時は拡大率/右上ワールド座標のみ保存（updatedAtは変更しない）
       try{
         saveViewportMeta(currentSlot, { touchUpdatedAt: false });
       }catch(_){}
@@ -877,7 +1053,8 @@
         if (objs.length){
           const sel = new fabric.ActiveSelection(objs, { canvas });
           canvas.setActiveObject(sel);
-          canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+          const render = canvas.requestRenderAll || canvas.renderAll;
+          render.call(canvas);
         }
         return;
       }
@@ -903,9 +1080,8 @@
       // 複製（Ctrl+D）
       if (isCtrl && keyLower==='d'){ ev.preventDefault(); duplicateObject(active); scheduleAutosave(); return; }
 
-      // Delete/Backspace
+      // Delete/Backspace / d で削除
       if (keyLower==='delete' || keyLower==='backspace'){ ev.preventDefault(); removeSelected(); return; }
-      // d キー（複数選択対応）
       if (keyLower==='d'){ ev.preventDefault(); removeSelected(); return; }
 
       // Enter: テキスト編集
@@ -959,7 +1135,8 @@
             img.set({ originX:'center', originY:'center', left:drop.x, top:drop.y, scaleX:scale, scaleY:scale, objectCaching:false });
             canvas.add(img);
             canvas.setActiveObject(img);
-            canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+            const render = canvas.requestRenderAll || canvas.renderAll;
+            render.call(canvas);
             scheduleAutosave(); pushHistory();
           }, { crossOrigin: null });
         };
@@ -974,9 +1151,9 @@
       if (!ok) return;
       canvas.clear();
       setCanvasBg('#ffffff');
-      // クリア直後の視点（ズーム1・原点）を保存しておく
+      // クリア直後の視点（ズーム1・原点）を保存しておく（updatedAt は編集として更新）
       canvas.setViewportTransform([1,0,0,1,0,0]);
-      saveToSlot(currentSlot); // 内部で meta も保存される
+      saveToSlot(currentSlot);
       resetHistoryBaseline();
     });
 
@@ -994,20 +1171,19 @@
             applyingHistory = true;
             importCanvasJSON(String(reader.result), () => {
               applyingHistory = false;
-              // インポート直後は今の視点（ズーム1/原点）。必要ならここで fit を入れてもよい。
-              // 保存時に meta も併せて保存される。
-              // （このアプリではスロット保存は saveToSlot() 経由で行い、そこに meta 保存が入っている）
+              // インポート直後は今の視点（ズーム1/原点）。保存時に meta も併せて保存。
               saveToSlot(currentSlot);
               resetHistoryBaseline();
               refreshSlotButtonsUI();
             });
-          }catch(e){ console.error('import failed:', e); }
+          }catch(e){ console.error('import failed:', e); applyingHistory=false; }
         };
         reader.readAsText(file);
       };
       input.click();
     });
     exportBtn.addEventListener('click', () => {
+      // エクスポートは fabric JSON（外部交換しやすい）
       const json = exportCanvasJSON();
       const blob = new Blob([json], { type:'application/json' });
       const url = URL.createObjectURL(blob);
@@ -1018,7 +1194,9 @@
       URL.revokeObjectURL(url);
     });
 
+    // =========================
     // 初期化
+    // =========================
     buildSlotButtons();
     resizeCanvasToViewport();
     currentSlot = 0;
