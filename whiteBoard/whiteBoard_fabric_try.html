@@ -51,7 +51,7 @@
       display:none;z-index:9999;background:#fff;border:1px solid rgba(0,0,0,.12);
       box-shadow:0 10px 24px rgba(2,6,23,.15);border-radius:10px;padding:6px;pointer-events:none;
     }
-    #slotPreview img{display:block;max-width:280px;max-height:180px;}
+    #slotPreview img{display:block;max-width:420px;max-height:270px;}
     #slotPreview .caption{font-size:12px;color:#475569;margin-top:4px;text-align:center;}
   </style>
 </head>
@@ -78,6 +78,7 @@
     <button id="pngBtn" class="toolbar-button" type="button">PNG出力</button>
     <button id="importBtn" class="toolbar-button" type="button">JSONインポート</button>
     <button id="exportBtn" class="toolbar-button" type="button">JSONエクスポート</button>
+    <button id="titleBtn" class="toolbar-button" type="button">タイトル変更</button>
     <button id="clearBtn" class="toolbar-button" type="button">クリア</button>
   </div>
 
@@ -104,8 +105,8 @@
     // 共通定数（“魔法数”の排除）
     // =========================
     // プレビュー画像サイズ
-    const PREVIEW_W = 280;
-    const PREVIEW_H = 180;
+    const PREVIEW_W = 420;
+    const PREVIEW_H = 270;
     // サムネイルの外接矩形フィット用パディング
     const FIT_PAD = 12;
     // 更新日バッジの描画スタイル
@@ -122,6 +123,8 @@
     // LocalStorage キー
     const LS_KEY_PREFIX = 'wb_slot_v1_';
     const LS_KEY_META_PREFIX = 'wb_slot_v1_meta_';
+    // スロットタイトル保存用
+    const LS_KEY_TITLE_PREFIX = 'wb_slot_title_v1_';
     // オートセーブ
     const AUTOSAVE_DELAY = 300;
     // ズーム制御
@@ -142,6 +145,7 @@
     const imageBtn  = document.getElementById('imageBtn');
     const importBtn = document.getElementById('importBtn');
     const clearBtn  = document.getElementById('clearBtn');
+    const titleBtn  = document.getElementById('titleBtn');
     const pngBtn    = document.getElementById('pngBtn');
     const slotPreviewEl = document.getElementById('slotPreview');
     const slotPreviewImg = slotPreviewEl.querySelector('img');
@@ -291,6 +295,26 @@
     }
 
     /**
+     * スロットタイトル取得
+     * @param {number} slot
+     * @returns {string|null} 空文字は有効なタイトル、未設定は null
+     */
+    function getSlotTitle(slot){
+      const v = localStorage.getItem(LS_KEY_TITLE_PREFIX + slot);
+      return (v === null) ? null : v;
+    }
+    /**
+     * スロットタイトル設定（空文字可）
+     * @param {number} slot
+     * @param {string} title
+     */
+    function setSlotTitle(slot, title){
+      if (title === null || title === undefined) return;
+      localStorage.setItem(LS_KEY_TITLE_PREFIX + slot, String(title));
+    }
+    function clearSlotTitle(slot){ localStorage.removeItem(LS_KEY_TITLE_PREFIX + slot); }
+
+    /**
      * 指定スロットにオブジェクトが1つ以上あるか判定する。
      * @param {number} i - スロット番号
      * @returns {boolean} true: データあり / false: 空
@@ -402,6 +426,16 @@
       render.call(canvas);
       canvasEl.focus({preventScroll:true});
     }
+
+    // タイトル変更ボタン
+    titleBtn.addEventListener('click', () => {
+      const cur = getSlotTitle(currentSlot);
+      const input = window.prompt(`スロット${currentSlot+1} のタイトルを入力（空で無題）:`, cur ?? '');
+      if (input === null) return; // キャンセル
+      setSlotTitle(currentSlot, input); // 空文字も許可
+      refreshSlotButtonsUI(); //（ボタン表示にタイトルは使っていないが将来拡張に備え）
+      if (hoveredSlot === currentSlot && slotPreviewEl.style.display === 'block') showSlotPreview(currentSlot, lastHoverEvent);
+    });
 
     /**
      * スロットボタンを生成し、クリック/プレビューのイベントを付与する。
@@ -567,7 +601,13 @@
 
       // ここで枠を先に出す（画像は未セットのまま）
       positionSlotPreview(e);
-      slotPreviewCaption.textContent = `スロット ${slotIndex+1}`;
+      // タイトル取得（null=未設定, ""=無題）
+      const t = getSlotTitle(slotIndex);
+      if (t === null){
+        slotPreviewCaption.textContent = `スロット ${slotIndex+1}`;
+      }else{
+        slotPreviewCaption.textContent = t === '' ? `スロット ${slotIndex+1}` : t;
+      }
       slotPreviewImg.removeAttribute('src'); // 古い残像を消す
       slotPreviewEl.style.display = 'block';
 
@@ -930,19 +970,83 @@
     // =========================
     // 操作ユーティリティ
     // =========================
+    /**
+     * スペースで色変更：
+     * - 単体 Line は stroke を変更
+     * - 単体の図形/テキスト/画像は fill（stroke を持つ場合は stroke も）を変更
+     * - 矢印（Line + Triangle のグループ）は line.stroke と tri.fill/tri.stroke を同期して変更
+     * @param {fabric.Object} obj
+     */
     function cycleFillColor(obj){
-      let target = obj;
-      if (obj && obj.type === 'group' && obj._objects && obj._objects.length){
-        const shape = obj._objects.find(o => ['rect','circle','triangle','line','path'].includes(o.type));
-        if (shape) target = shape;
+      if (!obj) return;
+
+      // パレット中の「次の色」を返す（見つからない場合は 0 番を返す）
+      const nextColor = (cur) => {
+        const s   = (cur || '').toString();
+        const idx = color_palette.indexOf(s);
+        const i   = idx >= 0 ? (idx + 1) % color_palette.length : 0;
+        return color_palette[i];
+      };
+
+      // ---- グループ（矢印など） ----
+      if (obj.type === 'group' && Array.isArray(obj._objects)){
+        const line  = obj._objects.find(o => o.type === 'line');
+        const tri   = obj._objects.find(o => o.type === 'triangle');
+        const shape = obj._objects.find(o => ['rect','circle','path','textbox','text'].includes(o.type));
+
+        // 矢印（line+triangle）: 同一色で統一
+        if (line || tri){
+          const base = (tri && (tri.fill || tri.stroke))
+                    || (line && line.stroke)
+                    || (shape && (shape.fill || shape.stroke))
+                    || color_palette[0];
+          const next = nextColor(base);
+          if (line) line.set({ stroke: next });
+          if (tri)  tri.set({ fill: next, stroke: next });
+          // 他に図形が入っている場合も合わせる（あれば）
+          if (shape){
+            shape.set({ fill: next });
+            if ('stroke' in shape) shape.set({ stroke: next });
+          }
+          obj.setCoords && obj.setCoords();
+          canvas.renderAll();
+          return;
+        }
+
+        // 通常のグループ：代表シェイプの色を回す
+        if (shape){
+          const base = shape.fill || shape.stroke || color_palette[0];
+          const next = nextColor(base);
+          shape.set({ fill: next });
+          if ('stroke' in shape) shape.set({ stroke: next });
+          obj.setCoords && obj.setCoords();
+          canvas.renderAll();
+          return;
+        }
+        // group だが該当なし → 以降の通常処理へフォールバック
       }
-      if (!target) return;
-      const current = (target.fill || color_palette[0]).toString();
-      const idx = color_palette.indexOf(current);
-      const next = color_palette[(idx + 1 + color_palette.length) % color_palette.length];
-      target.set({ fill: next });
+
+      // ---- 単体オブジェクト ----
+      if (obj.type === 'line'){
+        const base = obj.stroke || color_palette[0];
+        const next = nextColor(base);
+        obj.set({ stroke: next });
+      }else if (obj.type === 'triangle'){
+        // 単体三角形（念のため）
+        const base = obj.fill || obj.stroke || color_palette[0];
+        const next = nextColor(base);
+        obj.set({ fill: next, stroke: next });
+      }else{
+        // 図形/テキスト/画像など
+        const base = obj.fill || obj.stroke || color_palette[0];
+        const next = nextColor(base);
+        obj.set({ fill: next });
+        if ('stroke' in obj) obj.set({ stroke: next });
+      }
+      obj.setCoords && obj.setCoords();
       canvas.renderAll();
     }
+
     function editLabelByDblClick(targetObject){
       if (!targetObject) return;
       const group = (targetObject.type === 'group') ? targetObject : targetObject.group;
@@ -1151,6 +1255,11 @@
       if (!ok) return;
       canvas.clear();
       setCanvasBg('#ffffff');
+      // タイトルもクリア（要件：クリアボタンでタイトルも空に）
+      try{
+        clearSlotTitle(currentSlot);
+      }catch(_){}
+      // 視点リセット＆保存
       // クリア直後の視点（ズーム1・原点）を保存しておく（updatedAt は編集として更新）
       canvas.setViewportTransform([1,0,0,1,0,0]);
       saveToSlot(currentSlot);
