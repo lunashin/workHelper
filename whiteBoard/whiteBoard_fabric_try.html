@@ -119,7 +119,7 @@
     const BADGE_BORDER = 'rgba(0,0,0,0.15)';
     const BADGE_TEXT = '#334155';
     // スロット数
-    const SLOT_COUNT = 10;
+    const SLOT_COUNT = 20;
     // LocalStorage キー
     const LS_KEY_PREFIX = 'wb_slot_v1_';
     const LS_KEY_META_PREFIX = 'wb_slot_v1_meta_';
@@ -1091,6 +1091,16 @@
       canvas.renderAll();
     }
 
+    /**
+     * キャンバスの拡大・縮小をリセットする。
+     */ 
+    function zoomResetCanvas() {
+      //倍率を1に設定する
+      canvas.setZoom(1);
+      //左上を原点に移動する
+      canvas.absolutePan( new fabric.Point(0,0) );
+    }
+
     // =========================
     // 削除（複数選択対応）
     // =========================
@@ -1123,6 +1133,9 @@
       if (!evt.target){ canvas.discardActiveObject(); canvas.renderAll(); }
     });
     canvas.on('mouse:wheel', (opt) => {
+      // Ctrlキー押下時のみ
+      if (!opt.e.ctrlKey) { return; }
+
       const delta = opt.e.deltaY;
       let z = canvas.getZoom();
       // ---- ホイール倍率更新 ----
@@ -1145,6 +1158,9 @@
       const code = ev.code || '';
       const active = canvas.getActiveObject();
       const isCtrl = ev.ctrlKey || ev.metaKey;
+
+      // Esc: 拡大縮小・ポイントリセット
+      if (keyLower === 'escape'){ ev.preventDefault(); zoomResetCanvas(); saveViewportMeta(currentSlot, { touchUpdatedAt: false }); return; }
 
       // Undo/Redo
       if (isCtrl && keyLower === 'z' && ev.shiftKey){ ev.preventDefault(); redo(); return; }
