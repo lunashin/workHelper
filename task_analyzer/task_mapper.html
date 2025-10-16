@@ -63,7 +63,7 @@
   /* 出力エリアを左右 1:1 に分割 */
   .out-split {
     display: grid; gap: 16px;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr; /* 3カラム（左：明細、中：詳細集計、右：カテゴリ集計） */
   }
   .subpanel {
     background: #0b0d12; border: 1px solid var(--line); border-radius: 12px; padding: 12px;
@@ -90,11 +90,10 @@
           <button id="btnRender" class="primary">テーブルに変換</button>
         </div>
       </div>
-      <textarea id="inp" placeholder="日時	時間(開始〜)	時間(〜終了)	カテゴリ	詳細1	詳細2&#10;2025/9/17 11:10	00:20		業務分析	業務分析	"></textarea>
+      <textarea id="inp" placeholder="日時	時間(開始〜)	時間(〜終了)	カテゴリ1	詳細1	カテゴリ2	詳細2&#10;2025/9/17 11:10	00:20		業務分析	業務分析		"></textarea>
       <div class="hint">
         ※ ヘッダ行は自動で無視します。<br>
-        ※ 終了側で「詳細2」を採用する場合は「詳細2_」を先頭に付与。<br>
-        ※ 「詳細2」が空で両方の時間が入っている場合は、両方とも「詳細1」を採用（同一タスク扱い）。<br>
+        ※ 「カテゴリ2」「詳細2」が未指定の場合は、従来どおり「詳細2が空」の扱い（=「カテゴリ1」「詳細1」を使用）。<br>
         ※ 左の「詳細」は <code>[カテゴリ]_[詳細]</code> 形式。右端「作業日時」は参照元行の「日時」です。
       </div>
     </div>
@@ -105,16 +104,23 @@
         <div class="subpanel">
           <div class="subhdr">
             <button id="btnCsvLeft" disabled>CSV出力</button>
-            <h2>左：現在の出力データ</h2>
+            <h2>現在の出力データ</h2>
           </div>
           <div id="out-left" class="empty">ここに「作業時間」「詳細」「作業日時」の3列テーブルが表示されます。</div>
         </div>
         <div class="subpanel">
           <div class="subhdr">
             <button id="btnCsvRight" disabled>CSV出力</button>
-            <h2>右：詳細ごとの合計時間（分）</h2>
+            <h2>詳細ごとの合計時間（分）</h2>
           </div>
           <div id="out-right" class="empty">ここに「詳細」ごとの合計時間テーブルが表示されます。</div>
+        </div>
+        <div class="subpanel">
+          <div class="subhdr">
+            <button id="btnCsvCat" disabled>CSV出力</button>
+            <h2>カテゴリ毎の業務時間</h2>
+          </div>
+          <div id="out-cat" class="empty">ここに「カテゴリ」ごとの業務時間テーブルが表示されます。</div>
         </div>
       </div>
     </div>
@@ -127,7 +133,7 @@
   <script>
     const $ = (s, el=document) => el.querySelector(s);
 
-    const headerTokens = ["日時","時間(開始〜)","時間(〜終了)","カテゴリ","詳細1","詳細2"];
+    const headerTokens = ["日時","時間(開始〜)","時間(〜終了)","カテゴリ1","詳細1","カテゴリ2","詳細2"];
 
     function looksLikeHeader(line){
       return headerTokens.every(tok => line.includes(tok));
@@ -150,10 +156,9 @@
       return parseInt(m[1],10) * 60 + parseInt(m[2],10);
     }
 
-    // 詳細文字列の生成: [カテゴリ]_[詳細]（詳細2使用時は先頭に「詳細2_」）
-    function buildDetail(cat, detail, useDetail2Prefix=false){
-      const core = `[${cat}]_${detail}`;
-      return (useDetail2Prefix ? `詳細2_` : ``) + core;
+    // 詳細文字列の生成: 常に [カテゴリ]_[詳細]（「詳細2_」などの接頭辞は付けない）
+    function buildDetail(cat, detail){
+      return `${cat}_${detail}`;
     }
 
     // TSVをパースして {time, detail, dt} の配列に展開（左の表用データ）
@@ -172,21 +177,29 @@
         const dt     = normalizeCell(cells[0]); // 日時
         const tStart = normalizeCell(cells[1]); // 時間(開始〜)
         const tEnd   = normalizeCell(cells[2]); // 時間(〜終了)
-        const cat    = normalizeCell(cells[3]); // カテゴリ
+        const cat1   = normalizeCell(cells[3]); // カテゴリ1
         const d1     = normalizeCell(cells[4]); // 詳細1
-        const d2     = normalizeCell(cells[5]); // 詳細2
+        const cat2   = normalizeCell(cells[5]); // カテゴリ2（詳細2と対応）
+        const d2     = normalizeCell(cells[6]); // 詳細2
 
         if (tStart){
-          const detailText = buildDetail(cat, d1, false);
-          rows.push({ time: tStart, detail: detailText, dt });
+          const detailText = buildDetail(cat1, d1);
+          rows.push({ time: tStart, detail: detailText, dt, category: cat1 });
         }
         if (tEnd){
-          if (d2){
-            const detailText = buildDetail(cat, d2, true);
-            rows.push({ time: tEnd, detail: detailText, dt });
+          // 原則：「カテゴリ2」と「詳細2」は両方指定される前提。
+          // どちらか未指定の場合は従来どおり「カテゴリ1」「詳細1」を使用（接頭辞なし）にフォールバック。
+          const hasCat2 = !!cat2;
+          const hasD2   = !!d2;
+          if (hasCat2 && hasD2){
+            const detailText = buildDetail(cat2, d2);
+            rows.push({ time: tEnd, detail: detailText, dt, category: cat2 });
+          } else if (hasD2){ // 念のため：詳細2のみ指定→カテゴリ1で補完
+            const detailText = buildDetail(cat1, d2);
+            rows.push({ time: tEnd, detail: detailText, dt, category: cat1 });
           } else {
-            const detailText = buildDetail(cat, d1, false);
-            rows.push({ time: tEnd, detail: detailText, dt });
+            const detailText = buildDetail(cat1, d1); // 従来動作
+            rows.push({ time: tEnd, detail: detailText, dt, category: cat1 });
           }
         }
       }
@@ -196,16 +209,62 @@
     // 集計（右の表用データ）: {detail => totalMinutes}
     function aggregateByDetail(pairs){
       const map = new Map();
+      let grand = 0;
       for (const p of pairs){
         const min = toMinutes(p.time);
+        grand += min;
         const key = p.detail || "";
         if (!key) continue;
         map.set(key, (map.get(key) || 0) + min);
       }
-      // 配列化して合計分の降順でソート
-      return Array.from(map.entries())
+      const rows = Array.from(map.entries())
         .map(([detail, totalMin]) => ({ detail, totalMin }))
         .sort((a,b) => b.totalMin - a.totalMin);
+      return { rows, grand };
+    }
+
+    // 集計（カテゴリ毎）: {category => totalMinutes}
+    function aggregateByCategory(pairs){
+      const map = new Map();
+      let grand = 0;
+      for (const p of pairs){
+        const min = toMinutes(p.time);
+        grand += min;
+        const key = p.category || "";
+        if (!key) continue;
+        map.set(key, (map.get(key) || 0) + min);
+      }
+      const rows = Array.from(map.entries())
+        .map(([category, totalMin]) => ({ category, totalMin }))
+        .sort((a,b) => b.totalMin - a.totalMin);
+      return { rows, grand };
+    }
+
+    function renderCategoryTable(agg){
+      const el = $("#out-cat");
+      const { rows, grand } = agg;
+      if (!rows.length){
+        el.className = "empty";
+        el.innerHTML = "集計対象がありません。";
+        return;
+      }
+      const header = `
+        <thead><tr>
+          <th>カテゴリ</th>
+          <th style="width:120px" class="num">時間(分)</th>
+          <th style="width:100px" class="num">割合(%)</th>
+        </tr></thead>`;
+      const body = rows.map(r => {
+        const pct = grand ? (r.totalMin * 100 / grand) : 0;
+        return `<tr>
+          <td>${escapeHTML(r.category)}</td>
+          <td class="num">${r.totalMin}</td>
+          <td class="num">${pct.toFixed(1)}</td>
+        </tr>`;
+      }).join("");
+      el.className = "";
+      el.innerHTML = `<table>${header}<tbody>${body}</tbody></table>`;
+      $("#btnCsvCat").disabled = false;
     }
 
     function renderLeftTable(pairs){
@@ -239,9 +298,10 @@
 
     function renderRightAggTable(agg){
       const el = $("#out-right");
-      if (!agg.length){
+      if (!agg.rows.length){
         el.className = "empty";
         el.innerHTML = "集計対象がありません。";
+        $("#btnCsvCat").disabled = true;
         $("#btnCsvRight").disabled = true;
         return;
       }
@@ -249,17 +309,21 @@
         <thead><tr>
           <th>詳細</th>
           <th style="width:120px" class="num">合計(分)</th>
+          <th style="width:100px" class="num">割合(%)</th>
         </tr></thead>`;
-      const body = agg.map(r => {
+      const body = agg.rows.map(r => {
         const detail = escapeHTML(r.detail);
+        const pct = agg.grand ? (r.totalMin * 100 / agg.grand) : 0;
         return `<tr>
           <td>${detail}</td>
           <td class="num">${r.totalMin}</td>
+          <td class="num">${pct.toFixed(1)}</td>
         </tr>`;
       }).join("");
       el.className = "";
       el.innerHTML = `<table>${header}<tbody>${body}</tbody></table>`;
       $("#btnCsvRight").disabled = false;
+      $("#btnCsvCat").disabled = true;
     }
 
     // ===== CSV出力 =====
@@ -290,13 +354,16 @@
     // 最新のデータを保持（CSV出力用）
     let lastPairs = [];
     let lastAgg = [];
+    let lastCatAgg = { rows: [], grand: 0 };
 
     function handleRender(){
       const tsv = $("#inp").value;
       lastPairs = parseTSV(tsv);
       renderLeftTable(lastPairs);                 // 左：従来の出力（仕様を変えない）
-      lastAgg = aggregateByDetail(lastPairs);     // 右：詳細ごとの合計(分)
+      lastAgg = aggregateByDetail(lastPairs);     // 中：詳細ごとの合計(分)+総計
       renderRightAggTable(lastAgg);
+      lastCatAgg = aggregateByCategory(lastPairs); // 右端：カテゴリ毎の業務時間
+      renderCategoryTable(lastCatAgg);
     }
 
     // UI wiring
@@ -305,12 +372,16 @@
       $("#inp").value = "";
       lastPairs = [];
       lastAgg = [];
+      lastCatAgg = { rows: [], grand: 0 };
       $("#out-left").className="empty";
       $("#out-left").innerHTML="ここに「作業時間」「詳細」「作業日時」の3列テーブルが表示されます。";
       $("#out-right").className="empty";
       $("#out-right").innerHTML="ここに「詳細」ごとの合計時間テーブルが表示されます。";
+      $("#out-cat").className="empty";
+      $("#out-cat").innerHTML="ここに「カテゴリ」ごとの業務時間テーブルが表示されます。";
       $("#btnCsvLeft").disabled = true;
       $("#btnCsvRight").disabled = true;
+      $("#btnCsvCat").disabled = true;
     });
     // テキストエリアからフォーカスが外れたら自動レンダー
     $("#inp").addEventListener("blur", handleRender);
@@ -325,11 +396,28 @@
     });
 
     $("#btnCsvRight").addEventListener("click", () => {
-      if (!lastAgg.length) return;
-      const header = ["詳細","合計(分)"];
-      const rows = lastAgg.map(r => [r.detail, r.totalMin]);
+      if (!lastAgg.rows.length) return;
+      const header = ["詳細","合計(分)","割合(%)"];
+      const rows = lastAgg.rows.map(r => [
+        r.detail,
+        r.totalMin,
+        (lastAgg.grand ? (r.totalMin * 100 / lastAgg.grand).toFixed(1) : "0.0")
+      ]);
       const ts = new Date().toISOString().replace(/[:.]/g,"-");
       downloadCSV(`worklog_summary_${ts}.csv`, header, rows);
     });
-  </script>
+
+    // カテゴリ毎CSV
+    $("#btnCsvCat").addEventListener("click", () => {
+      if (!lastCatAgg.rows.length) return;
+      const header = ["カテゴリ","時間(分)","割合(%)"];
+      const rows = lastCatAgg.rows.map(r => [
+        r.category,
+        r.totalMin,
+        (lastCatAgg.grand ? (r.totalMin * 100 / lastCatAgg.grand).toFixed(1) : "0.0")
+      ]);
+      const ts = new Date().toISOString().replace(/[:.]/g,"-");
+      downloadCSV(`worklog_category_${ts}.csv`, header, rows);
+    });
+</script>
 </body>
