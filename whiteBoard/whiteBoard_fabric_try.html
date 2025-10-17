@@ -125,6 +125,8 @@
     const LS_KEY_META_PREFIX = 'wb_slot_v1_meta_';
     // スロットタイトル保存用
     const LS_KEY_TITLE_PREFIX = 'wb_slot_title_v1_';
+    // クリップボード（スロットを跨いでも有効）
+    const CLIPBOARD_KEY = 'wb_clipboard_v1';
     // オートセーブ
     const AUTOSAVE_DELAY = 300;
     // ズーム制御
@@ -172,7 +174,7 @@
     fabric.Object.prototype.borderColor = '#0ea5e9';
 
     // カラーパレット
-    const color_palette = ['#60a5fa','#22c55e','#f59e0b','#ef4444','#a78bfa', '#ffffff', '#000000'];
+    const color_palette = ['#60a5fa','#22c55e','#f59e0b','#ef4444','#a78bfa', 'gray', '#ffffff', '#000000'];
 
     // 図形作成時の既定パラメータ
     const line_param = { stroke:'#111827', strokeWidth:3, strokeLineCap:'round' };
@@ -868,11 +870,11 @@
       return group;
     }
     function addCircle(){
-      const circle = new fabric.Circle({ left:0, top:0, radius:60, fill:'#22c55e', stroke:'#052e16', strokeWidth:3, strokeUniform:true });
+      const circle = new fabric.Circle({ left:0, top:0, radius:60, fill:'#22c55e', stroke:'#22c55e', strokeWidth:3, strokeUniform:true });
       createLabeledGroup([circle]);
     }
     function addRect(){
-      const rect = new fabric.Rect({ left:0, top:0, width:150, height:100, rx:8, ry:8, fill:'#60a5fa', stroke:'#0a2472', strokeWidth:3, strokeUniform:true });
+      const rect = new fabric.Rect({ left:0, top:0, width:150, height:100, rx:8, ry:8, fill:'#60a5fa', stroke:'#60a5fa', strokeWidth:3, strokeUniform:true });
       createLabeledGroup([rect]);
     }
     function addTextBox(){
@@ -965,6 +967,162 @@
       if (previewLineArrowHead){ canvas.remove(previewLineArrowHead); previewLineArrowHead = null; }
       pendingLineStart = null;
       if (render) canvas.renderAll();
+    }
+
+    // =========================
+    // コピー / カット / ペースト（スロット跨ぎ対応）
+    // =========================
+    /**
+     * オブジェクト配列の外接矩形（キャンバス座標）を取得
+     * @param {fabric.Object[]} objs
+     * @returns {{minX:number,minY:number,maxX:number,maxY:number,width:number,height:number}}
+     */
+    // computeBounds は既存のまま
+
+    /**
+     * 選択オブジェクト群の外接矩形を求める
+     * @param {fabric.Object[]} objs
+     * @returns {{minX:number,minY:number,maxX:number,maxY:number,width:number,height:number}}
+     */
+    function computeBounds(objs){
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const o of objs){
+        const br = o.getBoundingRect(true, true);
+        minX = Math.min(minX, br.left);
+        minY = Math.min(minY, br.top);
+        maxX = Math.max(maxX, br.left + br.width);
+        maxY = Math.max(maxY, br.top  + br.height);
+      }
+      const width  = Math.max(0, maxX - minX);
+      const height = Math.max(0, maxY - minY);
+      return { minX, minY, maxX, maxY, width, height };
+    }
+
+    /**
+     * 選択中オブジェクトを localStorage へ保存（コピー/カット）
+     * @param {boolean} cut - true でカット（元オブジェクトを削除）
+     */
+    function copySelectionToClipboard(cut = false){
+      const selected = canvas.getActiveObjects();
+      if (!selected || !selected.length) return;
+
+      // ActiveSelection を展開せず素の配列で扱う
+      const bounds = computeBounds(selected); // 選択全体の外接矩形
+      const items = selected.map(o => {
+        // 1) シリアライズ
+        const raw = o.toObject();
+        // 2) そのオブジェクト自身の外接矩形（left/top は origin に依存するため使わない）
+        const br = o.getBoundingRect(true, true);
+        // 3) 選択全体の左上からの相対量（＝外接矩形ベース）
+        const brDx = br.left - bounds.minX;
+        const brDy = br.top  - bounds.minY;
+        return { raw, brDx, brDy };
+      });
+
+      const clip = {
+        type: 'wb_clip_v1',
+        // w: bounds.width,
+        // h: bounds.height,
+        // w/h は過去互換のため残すが、今回の貼り付け位置決定には使わない
+        w: bounds.width,
+        h: bounds.height,
+        items
+      };
+      try{
+        localStorage.setItem(CLIPBOARD_KEY, JSON.stringify(clip));
+      }catch(e){ console.warn('clipboard write failed:', e); }
+
+      if (cut){
+        // 元を削除
+        selected.forEach(o => canvas.remove(o));
+        canvas.discardActiveObject();
+        const render = canvas.requestRenderAll || canvas.renderAll;
+        render.call(canvas);
+        scheduleAutosave();
+        pushHistory();
+      }
+    }
+
+    /**
+     * クリップボードの内容をカーソル位置へ貼り付け
+     * @param {{x:number,y:number}} point - キャンバス座標（getDropPoint() 推奨）
+     */
+    function pasteClipboardAt(point){
+      let data = null;
+      try{
+        const raw = localStorage.getItem(CLIPBOARD_KEY);
+        if (raw) data = JSON.parse(raw);
+      }catch(e){ console.warn('clipboard read failed:', e); }
+      if (!data || data.type !== 'wb_clip_v1' || !Array.isArray(data.items) || !data.items.length) return;
+
+      const dropX = point.x, dropY = point.y; // ここを「貼り付け塊の左上」にする
+
+      // enlivenObjects で再生成（画像なども含む）
+      const objsRaw = data.items.map(it => it.raw);
+      const reviver = (orig, obj) => {
+        if (obj && obj.type === 'image' && !obj.crossOrigin) obj.crossOrigin = 'anonymous';
+      };
+      const maybePromise = fabric.util.enlivenObjects(objsRaw, { reviver });
+
+      const handleEnlivened = (arr) => {
+        const pasted = [];
+        for (let i=0; i<arr.length; i++){
+          const o = arr[i];
+          const meta = data.items[i];
+
+          // --- フォールバック対応 ---
+          // 新: brDx/brDy（外接矩形基準） / 旧: dx/dy（left/top基準）
+          const hasBR = typeof meta.brDx === 'number' && typeof meta.brDy === 'number';
+
+          if (hasBR){
+            // 1) 現在の外接矩形
+            const br = o.getBoundingRect(true, true);
+            // 2) このオブジェクトの外接矩形の「狙い位置」
+            const desiredLeft = dropX + meta.brDx;
+            const desiredTop  = dropY + meta.brDy;
+            // 3) 外接矩形ベースで差分移動（回転や origin の違いを吸収）
+            const deltaX = desiredLeft - br.left;
+            const deltaY = desiredTop  - br.top;
+            o.set({
+              left: (o.left || 0) + deltaX,
+              top : (o.top  || 0) + deltaY
+            });
+          } else {
+            // 旧フォーマット: dx/dy は left/top 基準（ズレるケースがあるが後方互換のため残す）
+            const offX = dropX;
+            const offY = dropY;
+            o.set({
+              left: offX + (meta.dx || 0),
+              top : offY + (meta.dy || 0)
+            });
+          }
+
+          o.setCoords && o.setCoords();
+          canvas.add(o);
+          pasted.push(o);
+        }
+
+        if (pasted.length){
+          const sel = new fabric.ActiveSelection(pasted, { canvas });
+          canvas.setActiveObject(sel);
+        }
+        const render = canvas.requestRenderAll || canvas.renderAll;
+        render.call(canvas);
+        scheduleAutosave();
+        pushHistory();
+      };
+
+      if (maybePromise && typeof maybePromise.then === 'function'){
+        maybePromise.then(handleEnlivened).catch(err => console.error('paste failed:', err));
+      }else{
+        // 旧 API 互換
+        fabric.util.enlivenObjects(
+          objsRaw,
+          (arr) => { try{ handleEnlivened(arr); }catch(e){ console.error('paste failed:', e); } },
+          null,
+          reviver
+        );
+      }
     }
 
     // =========================
@@ -1064,7 +1222,8 @@
       const nextText = window.prompt('図形のテキストを入力してください：', currentText);
       if (nextText === null) return;
 
-      labelText.set({ text: nextText, textAlign:'center', originX:'center', originY:'center' });
+      // labelText.set({ text: nextText, textAlign:'center', originX:'center', originY:'center' });
+      labelText.set({ text: nextText, textAlign:'center' });
       if (group){ centerGroupLabel(group); }
       (group || labelText).setCoords();
       canvas.renderAll();
@@ -1161,6 +1320,23 @@
 
       // Esc: 拡大縮小・ポイントリセット
       if (keyLower === 'escape'){ ev.preventDefault(); zoomResetCanvas(); saveViewportMeta(currentSlot, { touchUpdatedAt: false }); return; }
+
+      // --- Copy / Cut / Paste ---
+      if (isCtrl && keyLower === 'c'){
+        ev.preventDefault();
+        copySelectionToClipboard(false);
+        return;
+      }
+      if (isCtrl && keyLower === 'x'){
+        ev.preventDefault();
+        copySelectionToClipboard(true);
+        return;
+      }
+      if (isCtrl && keyLower === 'v'){
+        ev.preventDefault();
+        pasteClipboardAt(getDropPoint());
+        return;
+      }
 
       // Undo/Redo
       if (isCtrl && keyLower === 'z' && ev.shiftKey){ ev.preventDefault(); redo(); return; }
