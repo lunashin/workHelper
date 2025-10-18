@@ -969,6 +969,24 @@
       if (render) canvas.renderAll();
     }
 
+    /**
+     * ビューポートをパン（スクロール）するヘルパー
+     * @param {number} dx - 画面座標系のX方向移動量（px）
+     * @param {number} dy - 画面座標系のY方向移動量（px）
+     */
+    function panViewport(dx, dy){
+      const vt = canvas.viewportTransform || [1,0,0,1,0,0];
+      // vt = [a, b, c, d, e, f] -> e,f が平行移動
+      const a = vt[0], b = vt[1], c = vt[2], d = vt[3];
+      let  e = vt[4], f = vt[5];
+      // 画面座標の移動量をそのまま e,f に加算（fabricは画面→世界の変換を内部で考慮）
+      e += dx;
+      f += dy;
+      canvas.setViewportTransform([a,b,c,d,e,f]);
+      (canvas.requestRenderAll || canvas.renderAll).call(canvas);
+      saveViewportMeta(currentSlot, { touchUpdatedAt:false });
+    }
+
     // =========================
     // コピー / カット / ペースト（スロット跨ぎ対応）
     // =========================
@@ -1292,20 +1310,44 @@
       if (!evt.target){ canvas.discardActiveObject(); canvas.renderAll(); }
     });
     canvas.on('mouse:wheel', (opt) => {
-      // Ctrlキー押下時のみ
-      if (!opt.e.ctrlKey) { return; }
-
-      const delta = opt.e.deltaY;
-      let z = canvas.getZoom();
-      // ---- ホイール倍率更新 ----
-      z *= Math.pow(ZOOM_WHEEL_FACTOR, delta);
-      z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
-      canvas.zoomToPoint({x:opt.e.offsetX,y:opt.e.offsetY}, z);
-      opt.e.preventDefault(); opt.e.stopPropagation();
-      // ズーム時は拡大率/右上ワールド座標のみ保存（updatedAtは変更しない）
-      try{
-        saveViewportMeta(currentSlot, { touchUpdatedAt: false });
-      }catch(_){}
+      const e = opt.e;
+      // const delta = e.deltaY || 0;
+      const dy = e.deltaY || 0;
+      const dx = e.deltaX || 0;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+      // 優先順位:
+      // 1) Ctrl+Shift … 水平パン
+      // 2) Shift … ズーム
+      // 3) 無修飾 … deltaX が優勢なら水平パン、そうでなければ垂直パン
+      if (e.ctrlKey && e.shiftKey){
+        // ホイールの上下を左右移動に割当て（自然方向: 下で右へ）
+        panViewport(-dy, 0); // e は画面座標の＋が右なので、-dyで右へ
+        e.preventDefault(); e.stopPropagation();
+        return;
+      }
+      if (e.shiftKey){
+        // ズーム（マウス位置を中心に）
+        let z = canvas.getZoom();
+        z *= Math.pow(ZOOM_WHEEL_FACTOR, dy);
+        z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+        canvas.zoomToPoint({x:e.offsetX, y:e.offsetY}, z);
+        e.preventDefault(); e.stopPropagation();
+        // ズーム時はメタのみ更新（updatedAtは変更しない）
+        try{ saveViewportMeta(currentSlot, { touchUpdatedAt:false }); }catch(_){}
+        return;
+      }
+      // 無修飾:
+      // - トラックパッドの横スクロール（deltaX）が優勢なら水平パン
+      // - それ以外は垂直パン（自然方向: 下で下へ）
+      if (absX > absY){
+        // 水平パン（右スクロール=正のdeltaX → 右へ移動）
+        panViewport(-dx, 0);
+      }else{
+        // 垂直パン（下スクロール=正のdeltaY → 下へ移動）
+        panViewport(0, -dy); // f は＋で下へ移動するため -dy
+      }
+      e.preventDefault(); e.stopPropagation();
     });
 
     function handleKeydown(ev){
@@ -1395,15 +1437,6 @@
 
     // クリックでフォーカス
     document.addEventListener('pointerdown', () => { canvasEl.focus({preventScroll:true}); });
-
-    // Shift + ホイールでスロット切替
-    canvas.upperCanvasEl.addEventListener('wheel', (e) => {
-      if (!e.shiftKey) return;
-      e.preventDefault();
-      const dir = e.deltaY > 0 ? 1 : -1;
-      selectSlot(currentSlot + dir);
-      hideSlotPreview();
-    }, { passive: false });
 
     // PNG出力
     pngBtn.addEventListener('click', () => {
