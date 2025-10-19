@@ -63,7 +63,7 @@
   /* 出力エリアを左右 1:1 に分割 */
   .out-split {
     display: grid; gap: 16px;
-    grid-template-columns: 1fr 1fr 1fr; /* 3カラム（左：明細、中：詳細集計、右：カテゴリ集計） */
+    grid-template-columns: 1fr 1fr 1fr 1fr; /* 4カラム（左：明細／中：詳細集計／右：カテゴリ集計／右端：集計情報） */
   }
   .subpanel {
     background: #0b0d12; border: 1px solid var(--line); border-radius: 12px; padding: 12px;
@@ -122,6 +122,12 @@
           </div>
           <div id="out-cat" class="empty">ここに「カテゴリ」ごとの業務時間テーブルが表示されます。</div>
         </div>
+        <div class="subpanel">
+          <div class="subhdr">
+            <h2>集計情報</h2>
+          </div>
+          <div id="out-info" class="empty">ここに日付範囲・日数・総業務時間(h)を表示します。</div>
+        </div>
       </div>
     </div>
 
@@ -161,7 +167,7 @@
       return `${cat}_${detail}`;
     }
 
-    // TSVをパースして {time, detail, dt} の配列に展開（左の表用データ）
+    // TSVをパースして {time, detail, dt, category} の配列に展開（左の表用データ）
     function parseTSV(tsv){
       const lines = tsv.split(/\r?\n/).map(l => l.replace(/\s+$/,'')).filter(l => l.length);
       if (!lines.length) return [];
@@ -181,6 +187,11 @@
         const d1     = normalizeCell(cells[4]); // 詳細1
         const cat2   = normalizeCell(cells[5]); // カテゴリ2（詳細2と対応）
         const d2     = normalizeCell(cells[6]); // 詳細2
+
+        // 要件：時間(開始) および 時間(終了) の両方が欠けている行のみスキップ
+        if (!tStart && !tEnd) {
+          continue;
+        }
 
         if (tStart){
           const detailText = buildDetail(cat1, d1);
@@ -326,6 +337,67 @@
       $("#btnCsvCat").disabled = true;
     }
 
+    // ===== 集計情報 =====
+    function parseYMD(dtStr){
+      // dtStr: "YYYY/M/D HH:MM" を想定。日付部分のみ取り出す
+      if (!dtStr) return null;
+      const [dPart] = dtStr.split(/\s+/);
+      const m = dPart.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+      if (!m) return null;
+      const y = +m[1], mo = +m[2], d = +m[3];
+      return { y, mo, d };
+    }
+
+    function toDateObj(ymd){
+      if (!ymd) return null;
+      return new Date(ymd.y, ymd.mo - 1, ymd.d);
+    }
+
+    function formatYMD(ymd){
+      if (!ymd) return "";
+      const pad = (n)=> String(n).padStart(2, "0");
+      return `${ymd.y}/${pad(ymd.mo)}/${pad(ymd.d)}`;
+    }
+
+    function computeSummary(pairs){
+      if (!pairs.length) return { range:"-", days:0, totalHours:"0.0" };
+      // ユニーク日付の集合と最小・最大日付、総分
+      const dateSet = new Set();
+      let minDate = null, maxDate = null;
+      let totalMin = 0;
+      for (const p of pairs){
+        totalMin += toMinutes(p.time);
+        const ymd = parseYMD(p.dt);
+        if (!ymd) continue;
+        const key = `${ymd.y}-${ymd.mo}-${ymd.d}`;
+        dateSet.add(key);
+        const dObj = toDateObj(ymd);
+        if (!minDate || dObj < minDate) minDate = dObj;
+        if (!maxDate || dObj > maxDate) maxDate = dObj;
+      }
+      const startYMD = minDate ? { y:minDate.getFullYear(), mo:minDate.getMonth()+1, d:minDate.getDate() } : null;
+      const endYMD   = maxDate ? { y:maxDate.getFullYear(),   mo:maxDate.getMonth()+1, d:maxDate.getDate() } : null;
+      const range = (startYMD && endYMD) ? `${formatYMD(startYMD)}〜${formatYMD(endYMD)}` : "-";
+      const days = dateSet.size;
+      const totalHours = (totalMin / 60).toFixed(1);
+      return { range, days, totalHours };
+    }
+
+    function renderInfo(summary){
+      const el = $("#out-info");
+      const { range, days, totalHours } = summary;
+      el.className = "";
+      el.innerHTML = `
+        <table>
+          <thead><tr><th>項目</th><th>値</th></tr></thead>
+          <tbody>
+            <tr><td>日付範囲</td><td>${escapeHTML(range)}</td></tr>
+            <tr><td>日数</td><td class="num">${days}</td></tr>
+            <tr><td>総業務時間(h)</td><td class="num">${totalHours}</td></tr>
+          </tbody>
+        </table>`;
+    }
+
     // ===== CSV出力 =====
     function toCSV(rows){
       // rows: array of arrays (each is fields for a row)
@@ -355,6 +427,7 @@
     let lastPairs = [];
     let lastAgg = [];
     let lastCatAgg = { rows: [], grand: 0 };
+    let lastSummary = { range:"-", days:0, totalHours:"0.0" };
 
     function handleRender(){
       const tsv = $("#inp").value;
@@ -364,6 +437,8 @@
       renderRightAggTable(lastAgg);
       lastCatAgg = aggregateByCategory(lastPairs); // 右端：カテゴリ毎の業務時間
       renderCategoryTable(lastCatAgg);
+      lastSummary = computeSummary(lastPairs);     // 右端のさらに右：集計情報
+      renderInfo(lastSummary);
     }
 
     // UI wiring
@@ -373,12 +448,15 @@
       lastPairs = [];
       lastAgg = [];
       lastCatAgg = { rows: [], grand: 0 };
+      lastSummary = { range:"-", days:0, totalHours:"0.0" };
       $("#out-left").className="empty";
       $("#out-left").innerHTML="ここに「作業時間」「詳細」「作業日時」の3列テーブルが表示されます。";
       $("#out-right").className="empty";
       $("#out-right").innerHTML="ここに「詳細」ごとの合計時間テーブルが表示されます。";
       $("#out-cat").className="empty";
       $("#out-cat").innerHTML="ここに「カテゴリ」ごとの業務時間テーブルが表示されます。";
+      $("#out-info").className="empty";
+      $("#out-info").innerHTML="ここに日付範囲・日数・総業務時間(h)を表示します。";
       $("#btnCsvLeft").disabled = true;
       $("#btnCsvRight").disabled = true;
       $("#btnCsvCat").disabled = true;
