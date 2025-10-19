@@ -60,6 +60,7 @@
     <div>
       <span class="kbd">c</span> 円 /
       <span class="kbd">s</span> 四角 /
+      <span class="kbd">r</span> 菱形 /
       <span class="kbd">t</span> テキスト /
       <span class="kbd">a</span> 線
     </div>
@@ -135,6 +136,19 @@
     const ZOOM_WHEEL_FACTOR = 0.999;
     // Undo/Redo 履歴件数
     const HISTORY_LIMIT = 50;
+    // // ---- (0,0) マーカー描画用 ----
+    // const ORIGIN_MARK_SIZE = 10;                // 十字の半分の長さ(px, 画面座標で固定)
+    // const ORIGIN_MARK_LINEW = 1;                // 線幅
+    // const ORIGIN_MARK_COLOR = 'rgba(2,6,23,.25)'; // やや淡い色（#020617 25%）
+    // const ORIGIN_MARK_DOT = 3;                  // 中心の点の半径
+    // ---- (0,0) マーカー（ワールド固定オブジェクト）----
+    const ORIGIN_MARK_SIZE_WORLD = 20;          // 十字の半分の長さ（ワールド座標単位）
+    const ORIGIN_MARK_LINEW_WORLD = 1;          // 線幅（ワールド座標単位）
+    const ORIGIN_MARK_COLOR = 'rgba(2,6,23,.25)'; // 淡い色
+    const ORIGIN_MARK_DOT_WORLD = 3;            // 中心点の半径（ワールド座標単位）
+    const ORIGIN_MARK_HINT = false;             // trueで "(0,0)" の小ラベルも描画
+    // 原点マーカー参照
+    let originMarker = null;
 
     // =========================
     // DOM 参照
@@ -237,6 +251,8 @@
           attachGroupLabelPointers();
           const render = canvas.requestRenderAll || canvas.renderAll;
           render.call(canvas);
+          // 読み込み後に原点マーカーを復元＆背面へ
+          ensureOriginMarker(); keepOriginMarkerBack();
           canvasEl.focus({preventScroll:true});
           cb && cb();
         });
@@ -279,11 +295,14 @@
       if (!json){
         canvas.clear();
         setCanvasBg('#ffffff');
+        // クリア時も原点マーカーを再配置
+        ensureOriginMarker(); keepOriginMarkerBack();
         return;
       }
       importCanvasJSON(json, () => {
         // ---- 視点メタを復元（あれば）----
         applyViewportFromMeta(slot);
+        ensureOriginMarker(); keepOriginMarkerBack();
       });
     }
     /**
@@ -315,6 +334,45 @@
       localStorage.setItem(LS_KEY_TITLE_PREFIX + slot, String(title));
     }
     function clearSlotTitle(slot){ localStorage.removeItem(LS_KEY_TITLE_PREFIX + slot); }
+
+    /**
+     * 原点(0,0)マーカーをワールド座標に固定配置する。
+     * - Fabricオブジェクトとして追加（ズーム/パンに追従）
+     * - selectable:false, evented:false, excludeFromExport:true
+     * - レイヤー最背面へ配置
+     */
+    function ensureOriginMarker(){
+      if (originMarker && canvas.getObjects().includes(originMarker)) return;
+      const L = ORIGIN_MARK_SIZE_WORLD;
+      const lw = ORIGIN_MARK_LINEW_WORLD;
+      const dotR = ORIGIN_MARK_DOT_WORLD;
+      const lineStyle = { stroke: ORIGIN_MARK_COLOR, strokeWidth: lw, selectable:false, evented:false, excludeFromExport:true, objectCaching:false };
+      const horiz = new fabric.Line([-L, 0, L, 0], lineStyle);
+      const vert  = new fabric.Line([0, -L, 0, L], lineStyle);
+      const dot   = new fabric.Circle({ left:0, top:0, radius:dotR, fill:ORIGIN_MARK_COLOR, stroke:null, originX:'center', originY:'center', selectable:false, evented:false, excludeFromExport:true, objectCaching:false });
+      const parts = [horiz, vert, dot];
+      if (ORIGIN_MARK_HINT){
+        parts.push(new fabric.Text('(0,0)', { left:L+6, top:-L-6, fontSize:10, fill:ORIGIN_MARK_COLOR, originX:'left', originY:'bottom', selectable:false, evented:false, excludeFromExport:true, objectCaching:false }));
+      }
+      originMarker = new fabric.Group(parts, {
+        left:0, top:0, originX:'center', originY:'center',
+        selectable:false, evented:false, excludeFromExport:true, objectCaching:false
+      });
+      canvas.add(originMarker);
+      // 最背面へ
+      const sendFn = canvas.sendObjectToBack?.bind(canvas);
+      if (typeof sendFn === 'function') sendFn(originMarker);
+      (canvas.requestRenderAll || canvas.renderAll).call(canvas);
+    }
+
+    /**
+     * 原点マーカーを最背面に維持（他オブジェクト追加後などの保険）
+     */
+    function keepOriginMarkerBack(){
+      if (!originMarker) return;
+      const sendFn = canvas.sendObjectToBack?.bind(canvas);
+      if (typeof sendFn === 'function') sendFn(originMarker);
+    }
 
     /**
      * 指定スロットにオブジェクトが1つ以上あるか判定する。
@@ -427,6 +485,7 @@
       const render = canvas.requestRenderAll || canvas.renderAll;
       render.call(canvas);
       canvasEl.focus({preventScroll:true});
+      keepOriginMarkerBack();
     }
 
     // タイトル変更ボタン
@@ -510,8 +569,9 @@
       setCanvasBg('#ffffff');
       importCanvasJSON(json, () => {
         applyingHistory = false;
-        const render = canvas.requestRenderAll || canvas.renderAll;
-        render.call(canvas);
+        // 原点マーカーを復元し最背面へ
+        ensureOriginMarker(); keepOriginMarkerBack();
+        (canvas.requestRenderAll || canvas.renderAll).call(canvas);
       });
     }
     /** 履歴に現在スナップショットを積む（重複は抑止） */
@@ -558,6 +618,8 @@
       historyStack.push(next);
       applySnapshot(next);
     }
+
+    // （canvas描画フックによる原点描画は廃止。ワールド固定オブジェクトで実現）
 
     // =========================
     // サムネプレビュー
@@ -1182,7 +1244,7 @@
           // 他に図形が入っている場合も合わせる（あれば）
           if (shape){
             shape.set({ fill: next });
-            if ('stroke' in shape) shape.set({ stroke: next });
+            if ('stroke' in shape && shape.stroke !== null) shape.set({ stroke: next });
           }
           obj.setCoords && obj.setCoords();
           canvas.renderAll();
@@ -1194,7 +1256,7 @@
           const base = shape.fill || shape.stroke || color_palette[0];
           const next = nextColor(base);
           shape.set({ fill: next });
-          if ('stroke' in shape) shape.set({ stroke: next });
+          if ('stroke' in shape && shape.stroke !== null) shape.set({ stroke: next });
           obj.setCoords && obj.setCoords();
           canvas.renderAll();
           return;
@@ -1217,7 +1279,7 @@
         const base = obj.fill || obj.stroke || color_palette[0];
         const next = nextColor(base);
         obj.set({ fill: next });
-        if ('stroke' in obj) obj.set({ stroke: next });
+        if ('stroke' in obj && obj.stroke !== null) obj.set({ stroke: next });
       }
       obj.setCoords && obj.setCoords();
       canvas.renderAll();
@@ -1269,6 +1331,22 @@
     }
 
     /**
+     * 菱形（ダイヤ）を追加する。
+     * - 基本は正方形を45度回転
+     * - 四角と同じく、ダブルクリック/Enterでテキスト編集、Spaceで色変更可能（既存処理が適用）
+     */
+    function addDiamond(){
+      const size = 140;
+      const diamond = new fabric.Rect({
+        left:0, top:0, width:size, height:size,
+        rx:8, ry:8,
+        fill:'#f59e0b', stroke:'#f59e0b', strokeWidth:3,
+        strokeUniform:true, angle:45
+      });
+      createLabeledGroup([diamond]);
+    }
+
+    /**
      * キャンバスの拡大・縮小をリセットする。
      */ 
     function zoomResetCanvas() {
@@ -1310,6 +1388,9 @@
       if (!evt.target){ canvas.discardActiveObject(); canvas.renderAll(); }
     });
     canvas.on('mouse:wheel', (opt) => {
+      // 再描画時に原点マーカーも更新される（after:renderで描画）
+      // ここでは処理のみ。描画は最後の renderAll に任せる。
+
       const e = opt.e;
       // const delta = e.deltaY || 0;
       const dy = e.deltaY || 0;
@@ -1400,6 +1481,7 @@
       // 追加
       if (keyLower==='c' || code==='KeyC'){ ev.preventDefault(); addCircle(); scheduleAutosave(); pushHistory(); return; }
       if (keyLower==='s' || code==='KeyS'){ ev.preventDefault(); addRect();   scheduleAutosave(); pushHistory(); return; }
+      if (keyLower==='r' || code==='KeyR'){ ev.preventDefault(); addDiamond(); scheduleAutosave(); pushHistory(); return; }
       if (keyLower==='t' || code==='KeyT'){ ev.preventDefault(); addTextBox(); scheduleAutosave(); pushHistory(); return; }
 
       // 線
@@ -1413,6 +1495,35 @@
         if (keyLower==='arrowdown'){ ev.preventDefault(); nudgeObject(active,0, step); scheduleAutosave(); pushHistoryDebounced(); return; }
         if (keyLower==='arrowleft'){ ev.preventDefault(); nudgeObject(active,-step,0); scheduleAutosave(); pushHistoryDebounced(); return; }
         if (keyLower==='arrowright'){ ev.preventDefault(); nudgeObject(active, step,0); scheduleAutosave(); pushHistoryDebounced(); return; }
+      }
+
+      // ---- Zオーダー トグル（f）----
+      // 押すたびに「最前面」↔「最背面」をトグルする
+      // 複数選択時は全てに適用
+      if (keyLower === 'f' || code === 'KeyF'){
+        ev.preventDefault();
+        const targets = canvas.getActiveObjects();
+        if (targets && targets.length){
+          const bringFn = canvas.bringObjectToFront?.bind(canvas);
+          const sendFn  = canvas.sendObjectToBack?.bind(canvas);
+
+          if (toggleBringToFrontFlag){
+            // 最前面へ：選択順のまま積み上げ
+            if (typeof bringFn === 'function'){
+              targets.forEach(o => bringFn(o));
+            }
+          } else {
+            // 最背面へ：背面に送る（逆順適用で相対順を維持）
+            if (typeof sendFn === 'function'){
+              [...targets].reverse().forEach(o => sendFn(o));
+            }
+          }
+          toggleBringToFrontFlag = !toggleBringToFrontFlag;
+          (canvas.requestRenderAll || canvas.renderAll).call(canvas);
+          scheduleAutosave();
+          pushHistoryDebounced();
+        }
+        return;
       }
 
       // 複製（Ctrl+D）
@@ -1434,6 +1545,10 @@
       if (keyLower==='-'){ ev.preventDefault(); if (active){ active.set({ scaleX:(active.scaleX||1)*(ev.shiftKey?0.8:0.9),  scaleY:(active.scaleY||1)*(ev.shiftKey?0.8:0.9)  }); active.setCoords(); canvas.renderAll(); scheduleAutosave(); pushHistoryDebounced(); } return; }
     }
     window.addEventListener('keydown', handleKeydown, true);
+
+    // Zオーダーのトグル状態（true: 次は最前面 / false: 次は最背面）
+    // セッション全体で共有（直近の操作からトグル）
+    let toggleBringToFrontFlag = true;
 
     // クリックでフォーカス
     document.addEventListener('pointerdown', () => { canvasEl.focus({preventScroll:true}); });
@@ -1480,6 +1595,8 @@
       if (!ok) return;
       canvas.clear();
       setCanvasBg('#ffffff');
+      // クリア後に原点マーカーを復元
+      ensureOriginMarker(); keepOriginMarkerBack();
       // タイトルもクリア（要件：クリアボタンでタイトルも空に）
       try{
         clearSlotTitle(currentSlot);
@@ -1505,6 +1622,8 @@
             applyingHistory = true;
             importCanvasJSON(String(reader.result), () => {
               applyingHistory = false;
+              // インポート後に原点マーカーを復元
+              ensureOriginMarker(); keepOriginMarkerBack();
               // インポート直後は今の視点（ズーム1/原点）。保存時に meta も併せて保存。
               saveToSlot(currentSlot);
               resetHistoryBaseline();
@@ -1531,6 +1650,7 @@
     // =========================
     // 初期化
     // =========================
+    ensureOriginMarker();
     buildSlotButtons();
     resizeCanvasToViewport();
     currentSlot = 0;
@@ -1538,6 +1658,7 @@
     loadFromSlot(currentSlot);
     canvasEl.focus({preventScroll:true});
     resetHistoryBaseline();
+    keepOriginMarkerBack();
 
   })();
   </script>
