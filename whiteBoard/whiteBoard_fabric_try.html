@@ -513,14 +513,14 @@
 
         btn.addEventListener('click', () => selectSlot(i));
 
-        // Shift+ホバー プレビュー
+        // ホバー プレビュー
         btn.addEventListener('pointerenter', (e) => {
           hoveredSlot = i; lastHoverEvent = e;
-          if (e.shiftKey) showSlotPreview(i, e); else hideSlotPreview();
+          showSlotPreview(i, e);
         });
         btn.addEventListener('pointermove', (e) => {
           hoveredSlot = i; lastHoverEvent = e;
-          if (e.shiftKey) showSlotPreview(i, e); else hideSlotPreview();
+          showSlotPreview(i, e);
         });
         btn.addEventListener('pointerleave', () => { hoveredSlot = null; hideSlotPreview(); });
 
@@ -1472,7 +1472,7 @@
       const absY = Math.abs(dy);
       // 優先順位:
       // 1) Ctrl+Shift … 水平パン
-      // 2) Shift … ズーム
+      // 2) ctrlKey … ズーム
       // 3) 無修飾 … deltaX が優勢なら水平パン、そうでなければ垂直パン
       if (e.ctrlKey && e.shiftKey){
         // ホイールの上下を左右移動に割当て（自然方向: 下で右へ）
@@ -1480,7 +1480,7 @@
         e.preventDefault(); e.stopPropagation();
         return;
       }
-      if (e.shiftKey){
+      if (e.ctrlKey){
         // ズーム（マウス位置を中心に）
         let z = canvas.getZoom();
         z *= Math.pow(ZOOM_WHEEL_FACTOR, dy);
