@@ -1062,23 +1062,59 @@
       const x2 = hasPreview ? previewLine.x2 : canvas.getPointer(domEvent).x;
       const y2 = hasPreview ? previewLine.y2 : canvas.getPointer(domEvent).y;
 
-      const minX = Math.min(x1, x2);
-      const minY = Math.min(y1, y2);
+      // 1) プレビューと同じ絶対座標で一旦「素オブジェクト」を作成し、線＋矢印頭の外接矩形を取得
+      const angleDeg = calcurateArrowDegree(x1, y1, x2, y2);
+      const tmpLine = new fabric.Line([x1, y1, x2, y2], {
+        stroke: line_param.stroke,
+        strokeWidth: line_param.strokeWidth,
+        strokeLineCap: line_param.strokeLineCap,
+        strokeDashArray: (pendingLineDashed ? [8,6] : null),
+        selectable:false, evented:false
+      });
+      const tmpHead = new fabric.Triangle({
+        left:x2, top:y2,
+        width:arrow_param.width, height:arrow_param.height,
+        angle:angleDeg + 90,
+        fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
+        originX:arrow_param.originX, originY:arrow_param.originY,
+        selectable:false, evented:false
+      });
+      // 外接矩形（stroke や回転を考慮）
+      const brL = tmpLine.getBoundingRect(true, true);
+      const brH = tmpHead.getBoundingRect(true, true);
+      const minX = Math.min(brL.left, brH.left);
+      const minY = Math.min(brL.top , brH.top );
+      // 今回は左上をグループ基準にし、子は相対座標に正規化する
       const p1 = { x: x1 - minX, y: y1 - minY };
       const p2 = { x: x2 - minX, y: y2 - minY };
 
-      const shaftLine = new fabric.Line([p1.x, p1.y, p2.x, p2.y], {
-        stroke: line_param.stroke, strokeWidth: line_param.strokeWidth, strokeLineCap: line_param.strokeLineCap,
-        strokeDashArray: (pendingLineDashed ? [8,6] : null)
-      });
-      const angleDeg = calcurateArrowDegree(x1, y1, x2, y2);
-      const arrowHead = new fabric.Triangle({
-        left:p2.x, top:p2.y, width:arrow_param.width, height:arrow_param.height, angle:angleDeg + 90,
-        fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
-        originX:arrow_param.originX, originY:arrow_param.originY,
-      });
+      // 2) 正規化した相対座標で最終オブジェクトを作り直す
+      const shaftLine = new fabric.Line(
+        [p1.x, p1.y, p2.x, p2.y],
+        {
+          stroke: line_param.stroke,
+          strokeWidth: line_param.strokeWidth,
+          strokeLineCap: line_param.strokeLineCap,
+          strokeDashArray: (pendingLineDashed ? [8,6] : null)
+        }
+      );
+      const arrowHead = new fabric.Triangle(
+        {
+          left:p2.x, top:p2.y,
+          width:arrow_param.width, height:arrow_param.height,
+          angle:angleDeg + 90,
+          fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
+          originX:arrow_param.originX, originY:arrow_param.originY
+        }
+      );
 
-      const arrowGroup = new fabric.Group([shaftLine, arrowHead], { ...groupOptions, left:minX, top:minY });
+      // 3) 線と矢印頭を含めた「全体の左上(minX,minY)」にグループを配置
+      const arrowGroup = new fabric.Group([shaftLine, arrowHead], {
+        ...groupOptions,
+        left: minX,
+        top : minY
+      });
+      
       canvas.add(arrowGroup);
       canvas.setActiveObject(arrowGroup);
 
