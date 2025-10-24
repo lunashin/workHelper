@@ -1589,6 +1589,11 @@
         return;
       }
 
+      // 回転/スケール
+      if (isCtrl && keyLower==='r'){ ev.preventDefault(); if (active) { rotateObject(active, ev.shiftKey ? -15 : 15); scheduleAutosave(); pushHistoryDebounced(); } return; }
+      if (keyLower==='+'){ ev.preventDefault(); if (active){ active.set({ scaleX:(active.scaleX||1)*(ev.shiftKey?1.25:1.1), scaleY:(active.scaleY||1)*(ev.shiftKey?1.25:1.1) }); active.setCoords(); canvas.renderAll(); scheduleAutosave(); pushHistoryDebounced(); } return; }
+      if (keyLower==='-'){ ev.preventDefault(); if (active){ active.set({ scaleX:(active.scaleX||1)*(ev.shiftKey?0.8:0.9),  scaleY:(active.scaleY||1)*(ev.shiftKey?0.8:0.9)  }); active.setCoords(); canvas.renderAll(); scheduleAutosave(); pushHistoryDebounced(); } return; }
+
       // 追加
       if (keyLower==='c' || code==='KeyC'){ ev.preventDefault(); addCircle(); scheduleAutosave(); pushHistory(); return; }
       if (keyLower==='s' || code==='KeyS'){ ev.preventDefault(); addRect();   scheduleAutosave(); pushHistory(); return; }
@@ -1660,11 +1665,6 @@
 
       // Space: 色
       if (keyLower===' ' || keyLower==='spacebar' || code==='Space'){ ev.preventDefault(); if (active) cycleFillColor(active); scheduleAutosave(); pushHistoryDebounced(); return; }
-
-      // 回転/スケール
-      if (keyLower==='r'){ ev.preventDefault(); if (active) { rotateObject(active, ev.shiftKey ? -15 : 15); scheduleAutosave(); pushHistoryDebounced(); } return; }
-      if (keyLower==='+'){ ev.preventDefault(); if (active){ active.set({ scaleX:(active.scaleX||1)*(ev.shiftKey?1.25:1.1), scaleY:(active.scaleY||1)*(ev.shiftKey?1.25:1.1) }); active.setCoords(); canvas.renderAll(); scheduleAutosave(); pushHistoryDebounced(); } return; }
-      if (keyLower==='-'){ ev.preventDefault(); if (active){ active.set({ scaleX:(active.scaleX||1)*(ev.shiftKey?0.8:0.9),  scaleY:(active.scaleY||1)*(ev.shiftKey?0.8:0.9)  }); active.setCoords(); canvas.renderAll(); scheduleAutosave(); pushHistoryDebounced(); } return; }
     }
     window.addEventListener('keydown', handleKeydown, true);
 
