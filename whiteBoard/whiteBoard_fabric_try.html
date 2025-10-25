@@ -1154,64 +1154,44 @@
       render.call(canvas);
     }
 
-    // 線
-    let pendingLineStart = null;
-    let previewLine = null;
-    let previewLineArrowHead = null;
-    // 実線/点線の別を保持（true: 点線）
-    let pendingLineDashed = false;
-    // ---- 追加: 矢印なし“直線”用の状態 ----
-    let pendingPlainLineStart = null;
-    let previewPlainLine = null;
-    let pendingPlainDashed = false;
+    // ===== 直線/矢印 共通描画ステート =====
+    // mode: 'arrow' | 'line'
+    const strokeDraw = {
+      mode: null,
+      start: null,
+      dashed: false,
+      preview: null,   // fabric.Line
+      head: null       // fabric.Triangle (arrow のみ)
+    };
 
-    function startLineDrawing(options = {}){
-      const { dashed = false } = options;
+    /** 直線/矢印 描画開始（共通） */
+    function startStrokeDrawing({ mode, dashed = false } = {}){
+      // 既存プレビューの掃除
+      if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
+      if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
+      strokeDraw.mode = mode;                 // 'arrow' or 'line'
+      strokeDraw.dashed = !!dashed;
       const start = getDropPoint();
-      pendingLineStart = { x: start.x, y: start.y };
-      if (previewLine) { canvas.remove(previewLine); previewLine = null; }
-      if (previewLineArrowHead) { canvas.remove(previewLineArrowHead); previewLineArrowHead = null; }
-
-      pendingLineDashed = !!dashed;
-      // （矢印線のプレビュー）
-      previewLine = new fabric.Line([start.x, start.y, start.x, start.y],{
-        stroke: line_param.stroke, strokeWidth: line_param.strokeWidth, strokeLineCap: line_param.strokeLineCap,
-        opacity:.6, selectable:false, evented:false,
-        strokeDashArray: (pendingLineDashed ? [8,6] : null)
-      });
-      previewLineArrowHead = new fabric.Triangle({
-        left:start.x, top:start.y, width:arrow_param.width, height:arrow_param.height, angle:0,
-        fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
-        originX:arrow_param.originX, originY:arrow_param.originY, selectable:false, evented:false
-      });
-
-      canvas.add(previewLine, previewLineArrowHead);
-      canvas.bringToFront && canvas.bringToFront(previewLine);
-      canvas.renderAll();
-    }
-
-    // ---- 追加: 矢印なし“直線”ツール（実線／点線）----
-    function startPlainLineDrawing(options = {}){
-      const { dashed = false } = options;
-      const start = getDropPoint();
-      // 他のプレビューは消しておく（モードの競合回避）
-      if (previewLine) { canvas.remove(previewLine); previewLine = null; }
-      if (previewLineArrowHead) { canvas.remove(previewLineArrowHead); previewLineArrowHead = null; }
-      pendingLineStart = null; // 矢印モードは無効化
-
-      pendingPlainLineStart = { x: start.x, y: start.y };
-      pendingPlainDashed = !!dashed;
-      if (previewPlainLine) { canvas.remove(previewPlainLine); previewPlainLine = null; }
-
-      previewPlainLine = new fabric.Line([start.x, start.y, start.x, start.y], {
+      strokeDraw.start = { x: start.x, y: start.y };
+      // 共通のプレビュー線
+      strokeDraw.preview = new fabric.Line([start.x, start.y, start.x, start.y], {
         stroke: line_param.stroke,
         strokeWidth: line_param.strokeWidth,
         strokeLineCap: line_param.strokeLineCap,
         opacity: .6, selectable:false, evented:false,
-        strokeDashArray: (pendingPlainDashed ? [8,6] : null)
+        strokeDashArray: (strokeDraw.dashed ? [8,6] : null)
       });
-      canvas.add(previewPlainLine);
-      canvas.bringToFront && canvas.bringToFront(previewPlainLine);
+      canvas.add(strokeDraw.preview);
+      // 矢印なら頭も
+      if (mode === 'arrow'){
+        strokeDraw.head = new fabric.Triangle({
+          left:start.x, top:start.y, width:arrow_param.width, height:arrow_param.height, angle:0,
+          fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
+          originX:arrow_param.originX, originY:arrow_param.originY, selectable:false, evented:false
+        });
+        canvas.add(strokeDraw.head);
+      }
+      canvas.bringToFront && canvas.bringToFront(strokeDraw.preview);
       canvas.renderAll();
     }
 
@@ -1254,65 +1234,57 @@
 
     function calcurateArrowDegree(x1, y1, x2, y2) { return Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI; }
 
-    function updateLinePreviewIfNeeded(){
-      if (!pendingLineStart || !previewLine) return;
-      // 現在位置を取得し、水平/垂直に近ければスナップ
+    /** プレビュー更新（共通） */
+    function updateStrokePreview(){
+      if (!strokeDraw.mode || !strokeDraw.preview || !strokeDraw.start) return;
       const raw = getDropPoint();
-      const snapped = snapArrowEndpointHV(pendingLineStart, raw);
-      previewLine.set({ x2: snapped.x, y2: snapped.y });
-      if (previewLineArrowHead){
-        previewLineArrowHead.set({ left:snapped.x, top:snapped.y });
-        previewLineArrowHead.set({ angle: calcurateArrowDegree(previewLine.x1, previewLine.y1, snapped.x, snapped.y) + 90 });
+      // 水平/垂直スナップ
+      const end = snapArrowEndpointHV(strokeDraw.start, raw)
+      strokeDraw.preview.set({ x2: end.x, y2: end.y });
+      if (strokeDraw.head){
+        strokeDraw.head.set({ left:end.x, top:end.y });
+        strokeDraw.head.set({ angle: calcurateArrowDegree(strokeDraw.preview.x1, strokeDraw.preview.y1, end.x, end.y) + 90 });
       }
-      previewLine.setCoords();
-      previewLineArrowHead && previewLineArrowHead.setCoords();
+      strokeDraw.preview.setCoords();
+      strokeDraw.head && strokeDraw.head.setCoords();
       canvas.renderAll();
     }
 
-    // 直線ツールのプレビュー更新
-    function updatePlainLinePreviewIfNeeded(){
-      if (!pendingPlainLineStart || !previewPlainLine) return;
-      const pos = getDropPoint();
-      previewPlainLine.set({ x2: pos.x, y2: pos.y });
-      previewPlainLine.setCoords();
-      canvas.renderAll();
-    }
+    /** 確定（共通） */
+    function finalizeStrokeDrawingIfNeeded(domEvent){
+      if (!strokeDraw.mode || !strokeDraw.start) return false;
+      const hasPreview = !!strokeDraw.preview;
+      const x1 = hasPreview ? strokeDraw.preview.x1 : strokeDraw.start.x;
+      const y1 = hasPreview ? strokeDraw.preview.y1 : strokeDraw.start.y;
+      const p  = canvas.getPointer(domEvent);
+      const x2 = hasPreview ? strokeDraw.preview.x2 : p.x;
+      const y2 = hasPreview ? strokeDraw.preview.y2 : p.y;
 
-    function finalizeLineDrawingIfNeeded(domEvent){
-      // ---- 直線ツールの確定処理（矢印なし）----
-      if (pendingPlainLineStart){
-        const hasPreview = !!previewPlainLine;
-        const x1 = hasPreview ? previewPlainLine.x1 : pendingPlainLineStart.x;
-        const y1 = hasPreview ? previewPlainLine.y1 : pendingPlainLineStart.y;
-        const p = canvas.getPointer(domEvent);
-        const x2 = hasPreview ? previewPlainLine.x2 : p.x;
-        const y2 = hasPreview ? previewPlainLine.y2 : p.y;
+      if (strokeDraw.mode === 'line'){
         const plain = new fabric.Line([x1, y1, x2, y2], {
-          stroke: line_param.stroke, strokeWidth: line_param.strokeWidth, strokeLineCap: line_param.strokeLineCap,
-          strokeDashArray: (pendingPlainDashed ? [8,6] : null)
+          stroke: line_param.stroke,
+          strokeWidth: line_param.strokeWidth,
+          strokeLineCap: line_param.strokeLineCap,
+          strokeDashArray: (strokeDraw.dashed ? [8,6] : null)
         });
-        canvas.add(plain); canvas.setActiveObject(plain);
-        if (previewPlainLine){ canvas.remove(previewPlainLine); previewPlainLine = null; }
-        pendingPlainLineStart = null; pendingPlainDashed = false;
+        canvas.add(plain);
+        canvas.setActiveObject(plain);
+        // プレビュー片付け
+        if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
+        if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
+        strokeDraw.mode = null; strokeDraw.start = null; strokeDraw.dashed = false;
         canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
         scheduleAutosave(); pushHistory(); return true;
       }
-      // ---- 矢印ツールの確定処理 ----
-      if (!pendingLineStart) return false;
 
-      const hasPreview = !!previewLine;
-      const x1 = hasPreview ? previewLine.x1 : pendingLineStart.x;
-      const y1 = hasPreview ? previewLine.y1 : pendingLineStart.y;
-      const x2 = hasPreview ? previewLine.x2 : canvas.getPointer(domEvent).x;
-      const y2 = hasPreview ? previewLine.y2 : canvas.getPointer(domEvent).y;
-
+      // --- 矢印 ---
       // 1) プレビューと同じ絶対座標で一旦「素オブジェクト」を作成し、線＋矢印頭の外接矩形を取得
       const angleDeg = calcurateArrowDegree(x1, y1, x2, y2);
       const tmpLine = new fabric.Line([x1, y1, x2, y2], {
         stroke: line_param.stroke,
         strokeWidth: line_param.strokeWidth,
         strokeLineCap: line_param.strokeLineCap,
-        strokeDashArray: (pendingLineDashed ? [8,6] : null),
+        strokeDashArray: (strokeDraw.dashed ? [8,6] : null),
         selectable:false, evented:false
       });
       const tmpHead = new fabric.Triangle({
@@ -1323,12 +1295,10 @@
         originX:arrow_param.originX, originY:arrow_param.originY,
         selectable:false, evented:false
       });
-      // 外接矩形（stroke や回転を考慮）
       const brL = tmpLine.getBoundingRect(true, true);
       const brH = tmpHead.getBoundingRect(true, true);
       const minX = Math.min(brL.left, brH.left);
       const minY = Math.min(brL.top , brH.top );
-      // 今回は左上をグループ基準にし、子は相対座標に正規化する
       const p1 = { x: x1 - minX, y: y1 - minY };
       const p2 = { x: x2 - minX, y: y2 - minY };
 
@@ -1339,7 +1309,8 @@
           stroke: line_param.stroke,
           strokeWidth: line_param.strokeWidth,
           strokeLineCap: line_param.strokeLineCap,
-          strokeDashArray: (pendingLineDashed ? [8,6] : null)
+          // strokeDashArray: (pendingLineDashed ? [8,6] : null)
+          strokeDashArray: (strokeDraw.dashed ? [8,6] : null)
         }
       );
       const arrowHead = new fabric.Triangle(
@@ -1362,25 +1333,24 @@
       canvas.add(arrowGroup);
       canvas.setActiveObject(arrowGroup);
 
-      if (previewLine){ canvas.remove(previewLine); previewLine = null; }
-      if (previewLineArrowHead){ canvas.remove(previewLineArrowHead); previewLineArrowHead = null; }
-      pendingLineStart = null;
-      pendingLineDashed = false;
+      // プレビュー片付け
+      if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
+      if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
+      strokeDraw.mode = null; strokeDraw.start = null; strokeDraw.dashed = false;
+
       canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
       scheduleAutosave();
       pushHistory();
       return true;
     }
 
-    function cancelLinePreview(render){
-      if (previewLine){ canvas.remove(previewLine); previewLine = null; }
-      if (previewLineArrowHead){ canvas.remove(previewLineArrowHead); previewLineArrowHead = null; }
-      pendingLineStart = null;
-      pendingLineDashed = false;
-      // 直線ツールのプレビューもキャンセル
-      if (previewPlainLine){ canvas.remove(previewPlainLine); previewPlainLine = null; }
-      pendingPlainLineStart = null;
-      pendingPlainDashed = false;
+    /** プレビューキャンセル（共通） */
+    function cancelStrokePreview(render){
+      if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
+      if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
+      strokeDraw.mode = null;
+      strokeDraw.start = null;
+      strokeDraw.dashed = false;
       if (render) canvas.renderAll();
     }
 
@@ -1745,8 +1715,9 @@
     canvas.on('mouse:move', (evt) => {
       const p = canvas.getPointer(evt.e);
       lastPointer = { x: p.x, y: p.y };
-      updateLinePreviewIfNeeded();
-      updatePlainLinePreviewIfNeeded();
+      // updateLinePreviewIfNeeded();
+      // updatePlainLinePreviewIfNeeded();
+      updateStrokePreview();
     });
     canvas.upperCanvasEl.addEventListener('dblclick', (domEvt) => {
       const target = canvas.findTarget(domEvt, true);
@@ -1754,7 +1725,8 @@
       editLabelByDblClick(target);
     });
     canvas.on('mouse:down', (evt) => {
-      if (finalizeLineDrawingIfNeeded(evt.e)) return;
+      // if (finalizeLineDrawingIfNeeded(evt.e)) return;
+      if (finalizeStrokeDrawingIfNeeded(evt.e)) return;
       if (!evt.target){ canvas.discardActiveObject(); canvas.renderAll(); }
     });
     canvas.on('mouse:wheel', (opt) => {
@@ -1859,19 +1831,19 @@
       // 線
       // 既存: A … 実線（従来動作は実線に統一）
       if ((keyLower==='a' || code==='KeyA') && !ev.shiftKey){
-        ev.preventDefault(); startLineDrawing({ dashed:false }); return;
+        ev.preventDefault(); startStrokeDrawing({ mode:'arrow', dashed:false }); return;
       }
       // 変更: Shift + A … 矢印なしの“実線”
       if ((keyLower==='a' || code==='KeyA') && ev.shiftKey){
-        ev.preventDefault(); startPlainLineDrawing({ dashed:false }); return;
+        ev.preventDefault(); startStrokeDrawing({ mode:'line', dashed:false }); return;
       }
       // 変更: Q … 矢印なしの“点線”
       if (keyLower==='q' || code==='KeyQ'){
-        ev.preventDefault(); startPlainLineDrawing({ dashed:true }); return;
+        ev.preventDefault(); startStrokeDrawing({ mode:'line', dashed:true }); return;
       }
 
       // Esc: 矢印描画キャンセル
-      if (previewLine && keyLower==='escape' || code==='Escape'){ ev.preventDefault(); cancelLinePreview(true); return; }
+      if (strokeDraw.mode && (keyLower==='escape' || code==='Escape')){ ev.preventDefault(); cancelStrokePreview(true); return; }
 
       // Esc: 拡大縮小・ポイントリセット
       if (keyLower === 'escape'){ ev.preventDefault(); zoomResetCanvas(); saveViewportMeta(currentSlot, { touchUpdatedAt: false }); return; }
