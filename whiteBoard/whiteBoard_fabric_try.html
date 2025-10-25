@@ -307,6 +307,10 @@
     const ZOOM_WHEEL_FACTOR = 0.999;
     // Undo/Redo 履歴件数
     const HISTORY_LIMIT = 50;
+    // ---- 矢印プレビューのスナップ設定（水平・垂直）----
+    // 画面ピクセルでの判定幅（ズームに依らず体感一定）
+    const ARROW_SNAP_TOL_PX = 10;
+
     // // ---- (0,0) マーカー描画用 ----
     // const ORIGIN_MARK_SIZE = 10;                // 十字の半分の長さ(px, 画面座標で固定)
     // const ORIGIN_MARK_LINEW = 1;                // 線幅
@@ -1211,14 +1215,54 @@
       canvas.renderAll();
     }
 
+    /**
+     * 矢印プレビューの終点スナップ（水平/垂直）
+     * - 判定は「画面ピクセル」でのズレ量を基準にし、ズームに依らず一定の体感にする
+     * - 始点 start と現在座標 pos から、水平or垂直に近い方へスナップした座標を返す
+     * - 両方閾値内の場合は「より近い軸」にスナップ
+     * @param {{x:number,y:number}} start  ワールド座標の始点
+     * @param {{x:number,y:number}} pos    ワールド座標の現在位置
+     * @returns {{x:number,y:number}} スナップ後の終点（ワールド座標）
+     */
+    function snapArrowEndpointHV(start, pos){
+      // 画面ピクセル→ワールドの換算はズーム倍率で近似
+      const z = canvas.getZoom() || 1;
+      const tolWorld = ARROW_SNAP_TOL_PX / z;
+
+      const dx = pos.x - start.x;
+      const dy = pos.y - start.y;
+      const adx = Math.abs(dx);
+      const ady = Math.abs(dy);
+
+      const snapH = (ady <= tolWorld); // 水平（y を揃える）
+      const snapV = (adx <= tolWorld); // 垂直（x を揃える）
+
+      if (!snapH && !snapV) return pos;
+
+      // 両方内なら、より小さい誤差の軸を優先
+      if (snapH && snapV){
+        if (ady <= adx){
+          return { x: pos.x, y: start.y }; // 水平優先
+        }else{
+          return { x: start.x, y: pos.y }; // 垂直優先
+        }
+      }
+      if (snapH) return { x: pos.x, y: start.y };
+      // snapV
+      return { x: start.x, y: pos.y };
+    }
+
     function calcurateArrowDegree(x1, y1, x2, y2) { return Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI; }
+
     function updateLinePreviewIfNeeded(){
       if (!pendingLineStart || !previewLine) return;
-      const pos = getDropPoint();
-      previewLine.set({ x2: pos.x, y2: pos.y });
+      // 現在位置を取得し、水平/垂直に近ければスナップ
+      const raw = getDropPoint();
+      const snapped = snapArrowEndpointHV(pendingLineStart, raw);
+      previewLine.set({ x2: snapped.x, y2: snapped.y });
       if (previewLineArrowHead){
-        previewLineArrowHead.set({ left:pos.x, top:pos.y });
-        previewLineArrowHead.set({ angle: calcurateArrowDegree(previewLine.x1, previewLine.y1, pos.x, pos.y) + 90 });
+        previewLineArrowHead.set({ left:snapped.x, top:snapped.y });
+        previewLineArrowHead.set({ angle: calcurateArrowDegree(previewLine.x1, previewLine.y1, snapped.x, snapped.y) + 90 });
       }
       previewLine.setCoords();
       previewLineArrowHead && previewLineArrowHead.setCoords();
@@ -1327,6 +1371,7 @@
       pushHistory();
       return true;
     }
+
     function cancelLinePreview(render){
       if (previewLine){ canvas.remove(previewLine); previewLine = null; }
       if (previewLineArrowHead){ canvas.remove(previewLineArrowHead); previewLineArrowHead = null; }
@@ -1766,9 +1811,6 @@
       const active = canvas.getActiveObject();
       const isCtrl = ev.ctrlKey || ev.metaKey;
 
-      // Esc: 拡大縮小・ポイントリセット
-      if (keyLower === 'escape'){ ev.preventDefault(); zoomResetCanvas(); saveViewportMeta(currentSlot, { touchUpdatedAt: false }); return; }
-
       // --- Copy / Cut / Paste ---
       if (isCtrl && keyLower === 'c'){
         ev.preventDefault();
@@ -1827,7 +1869,12 @@
       if (keyLower==='q' || code==='KeyQ'){
         ev.preventDefault(); startPlainLineDrawing({ dashed:true }); return;
       }
-      if (keyLower==='escape' || code==='Escape'){ ev.preventDefault(); cancelLinePreview(true); return; }
+
+      // Esc: 矢印描画キャンセル
+      if (previewLine && keyLower==='escape' || code==='Escape'){ ev.preventDefault(); cancelLinePreview(true); return; }
+
+      // Esc: 拡大縮小・ポイントリセット
+      if (keyLower === 'escape'){ ev.preventDefault(); zoomResetCanvas(); saveViewportMeta(currentSlot, { touchUpdatedAt: false }); return; }
 
       // 移動
       if (active){
