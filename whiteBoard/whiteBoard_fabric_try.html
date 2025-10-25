@@ -1621,17 +1621,33 @@
       obj.setCoords();
       canvas.renderAll();
     }
+
     function duplicateObject(obj){
-      if (!obj) return;
-      obj.clone().then((clone) => {
-        clone.set({ left: (obj.left || 0) + 32, top:  (obj.top  || 0) + 32 });
-        canvas.add(clone);
-        canvas.setActiveObject(clone);
-        const render = canvas.requestRenderAll || canvas.renderAll;
-        render.call(canvas);
-        pushHistory();
-      }).catch((err) => console.error('clone failed:', err));
+      // 現在の選択を優先、なければ引数 obj を対象にする
+      let targets = canvas.getActiveObjects();
+      if (!targets || !targets.length){
+        if (!obj) return;
+        targets = [obj];
+        canvas.setActiveObject(obj);
+      }
+      // 既存のコピー機構を利用してクリップボードへ（cut=false）
+      try{
+        copySelectionToClipboard(false);
+      }catch(e){
+        console.error('duplicate: copySelectionToClipboard failed:', e);
+        return;
+      }
+      // 貼り付け位置は「選択外接矩形の左上 + (32,32)」
+      try{
+        const bounds = computeBounds(targets);
+        const dropPoint = { x: bounds.minX + 32, y: bounds.minY + 32 };
+        pasteClipboardAt(dropPoint);
+        // pasteClipboardAt 内で render / autosave / pushHistory が呼ばれる
+      }catch(e){
+        console.error('duplicate: pasteClipboardAt failed:', e);
+      }
     }
+
     function rotateObject(obj, deg){
       obj.rotate((obj.angle || 0) + deg);
       obj.setCoords();
