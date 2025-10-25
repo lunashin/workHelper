@@ -105,6 +105,175 @@
     const D = (...a) => DEBUG && console.log('[dbg]', ...a);
 
     // =========================
+    // ネットワークガード（外部通信の検知とブロック）
+    // =========================
+    /**
+     * URL を文字列に正規化
+     * - Request / URL / string に対応
+     * @param {any} input
+     * @returns {string}
+     */
+    function toURLString(input){
+      try{
+        if (!input) return '';
+        if (typeof input === 'string') return input;
+        if (input instanceof Request) return input.url || '';
+        if (input instanceof URL) return String(input.href || '');
+        // fetch の第一引数に {url:"..."} のようなパターン対策
+        if (typeof input === 'object' && 'url' in input && typeof input.url === 'string') return input.url;
+      }catch(_){}
+      return '';
+    }
+    /**
+     * 与えられた URL が「外部サーバ」かどうかを判定
+     * - data:, blob:, file: は許可
+     * - http/https は「同一オリジン(origin)のみ許可」、それ以外はブロック
+     * - 相対パスは同一オリジンとして解決
+     * @param {string} urlStr
+     * @returns {boolean} true: 外部（ブロック対象）/ false: 許可
+     */
+    function isExternalURL(urlStr){
+      if (!urlStr) return false; // 何も無ければスルー（この後で失敗）
+      try{
+        // data/blob/file は常に許可
+        if (urlStr.startsWith('data:')) return false;
+        if (urlStr.startsWith('blob:')) return false;
+        if (urlStr.startsWith('file:')) return false;
+
+        const base = (location && location.href) ? location.href : 'http://localhost/';
+        const u = new URL(urlStr, base);
+        // http/https 以外（例: chrome-extension:）は外部扱いとしてブロック
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return true;
+        // 同一オリジンなら許可、異なるオリジンはブロック
+        return u.origin !== location.origin;
+      }catch(_){
+        // パースできないものは念のためブロック
+        return true;
+      }
+    }
+    /**
+     * 検知時にユーザへ通知し、ブロックを明示
+     * @param {string} apiName
+     * @param {string} urlStr
+     */
+    function notifyBlocked(apiName, urlStr){
+      try{
+        // 連続表示を避けるなら簡易デバウンス（必要なら有効化）
+        alert(`外部サーバへの通信を検出しブロックしました。\nAPI: ${apiName}\nURL: ${urlStr}`);
+        console.warn('[blocked external request]', apiName, urlStr);
+      }catch(_){}
+    }
+    /**
+     * ネットワークフックの設置
+     */
+    (function installNetworkGuards(){
+      // ---- fetch ----
+      if (typeof window.fetch === 'function'){
+        const _fetch = window.fetch.bind(window);
+        window.fetch = function(input, init){
+          const urlStr = toURLString(input);
+          if (isExternalURL(urlStr)){
+            notifyBlocked('fetch', urlStr);
+            return Promise.reject(new Error('Blocked external fetch: ' + urlStr));
+          }
+          return _fetch(input, init);
+        };
+      }
+      // ---- XMLHttpRequest ----
+      if (typeof window.XMLHttpRequest === 'function'){
+        const _open = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url){
+          const urlStr = toURLString(url);
+          // open の時点で判定（send 前）
+          this.__wb_checked_url__ = urlStr;
+          if (isExternalURL(urlStr)){
+            this.__wb_blocked__ = true;
+            notifyBlocked('XMLHttpRequest', urlStr);
+          }else{
+            this.__wb_blocked__ = false;
+          }
+          return _open.apply(this, arguments);
+        };
+        const _send = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function(body){
+          if (this.__wb_blocked__){
+            // 送信せずにエラー状態へ
+            try{ this.abort(); }catch(_){}
+            throw new Error('Blocked external XMLHttpRequest: ' + (this.__wb_checked_url__ || ''));
+          }
+          return _send.apply(this, arguments);
+        };
+      }
+      // ---- WebSocket ----
+      if (typeof window.WebSocket === 'function'){
+        const _WS = window.WebSocket;
+        window.WebSocket = function(url, protocols){
+          const urlStr = toURLString(url);
+          // ws(s) のオリジン判定（location とホスト比較）。URL の host:port が一致しなければ外部扱い
+          try{
+            const base = (location && location.href) ? location.href : 'http://localhost/';
+            const u = new URL(urlStr, base);
+            const sameHost = (u.hostname === location.hostname) && ((u.port||'') === (location.port||''));
+            if (!sameHost){
+              notifyBlocked('WebSocket', urlStr);
+              throw new Error('Blocked external WebSocket: ' + urlStr);
+            }
+          }catch(_){
+            notifyBlocked('WebSocket', urlStr);
+            throw new Error('Blocked external WebSocket: ' + urlStr);
+          }
+          return new _WS(url, protocols);
+        };
+        window.WebSocket.prototype = _WS.prototype;
+      }
+      // ---- EventSource ----
+      if (typeof window.EventSource === 'function'){
+        const _ES = window.EventSource;
+        window.EventSource = function(url, config){
+          const urlStr = toURLString(url);
+          if (isExternalURL(urlStr)){
+            notifyBlocked('EventSource', urlStr);
+            throw new Error('Blocked external EventSource: ' + urlStr);
+          }
+          return new _ES(url, config);
+        };
+        window.EventSource.prototype = _ES.prototype;
+      }
+      // ---- sendBeacon ----
+      if (navigator && typeof navigator.sendBeacon === 'function'){
+        const _sb = navigator.sendBeacon.bind(navigator);
+        navigator.sendBeacon = function(url, data){
+          const urlStr = toURLString(url);
+          if (isExternalURL(urlStr)){
+            notifyBlocked('sendBeacon', urlStr);
+            return false; // 送信しない
+          }
+          return _sb(url, data);
+        };
+      }
+      // ---- Image.src（透過的に外部URL読み込みをブロック）----
+      try{
+        const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+        if (desc && desc.set){
+          const origSet = desc.set;
+          Object.defineProperty(HTMLImageElement.prototype, 'src', {
+            set(value){
+              const urlStr = String(value || '');
+              if (isExternalURL(urlStr)){
+                notifyBlocked('Image.src', urlStr);
+                // ブロック：空画像に差し替え（1x1透明PNG）
+                const emptyPNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=';
+                return origSet.call(this, emptyPNG);
+              }
+              return origSet.call(this, value);
+            }
+          });
+        }
+      }catch(_){}
+    })();
+
+
+    // =========================
     // 共通定数（“魔法数”の排除）
     // =========================
     // プレビュー画像サイズ
@@ -905,6 +1074,35 @@
     }
 
     // =========================
+    // 出力用ユーティリティ（ファイル名）
+    // =========================
+    /**
+     * 現在日時を yyyymmdd_hhmmss で返す（ローカル時刻）。
+     * @returns {string}
+     */
+    function formatNowForFilename(){
+      const d = new Date();
+      const y  = d.getFullYear();
+      const m  = String(d.getMonth()+1).padStart(2,'0');
+      const dd = String(d.getDate()).padStart(2,'0');
+      const hh = String(d.getHours()).padStart(2,'0');
+      const mm = String(d.getMinutes()).padStart(2,'0');
+      const ss = String(d.getSeconds()).padStart(2,'0');
+      return `${y}${m}${dd}_${hh}${mm}${ss}`;
+    }
+    /**
+     * スロットタイトルをファイル名向けに取得（未設定/空白は「スロットn」）
+     * ファイル名に使えない文字は _ に置換。
+     * @param {number} slot
+     * @returns {string}
+     */
+    function getSafeTitleForFilename(slot){
+      const t = getSlotTitle(slot);
+      const base = (t === null || String(t).trim() === '') ? `スロット${slot+1}` : String(t).trim();
+      return base.replace(/[\\\/:*?"<>|]/g, '_');
+    }
+
+    // =========================
     // 既存描画（要点）
     // =========================
     const groupOptions = { hasControls:true, hoverCursor:'move', originX:'left', originY:'top', opacity:1, objectCaching:false };
@@ -1680,7 +1878,9 @@
       const dataURL = canvas.toDataURL({ format:'png', multiplier:2, enableRetinaScaling:false });
       const a = document.createElement('a');
       a.href = dataURL;
-      a.download = `canvas-slot${currentSlot+1}.png`;
+      const title = getSafeTitleForFilename(currentSlot);
+      const stamp = formatNowForFilename();
+      a.download = `${title}_${stamp}.png`;
       document.body.appendChild(a); a.click(); a.remove();
     });
 
@@ -1764,7 +1964,9 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `canvas-export-slot${currentSlot+1}.json`;
+      const title = getSafeTitleForFilename(currentSlot);
+      const stamp = formatNowForFilename();
+      a.download = `${title}_${stamp}.json`;
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
     });
@@ -1783,6 +1985,150 @@
     keepOriginMarkerBack();
 
   })();
-  </script>
+
+
+
+// TEST for out connection
+// (function(){
+//   // 小さなテストパネルを作成
+//   const panel = document.createElement('div');
+//   panel.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:99999;background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 6px 20px rgba(2,6,23,.15);padding:10px;font:12px system-ui;';
+//   panel.innerHTML = `
+//     <div style="font-weight:700;margin-bottom:6px;">Network Guard テスト</div>
+//     <div style="display:grid;gap:6px;">
+//       <button data-t="fetch">fetch</button>
+//       <button data-t="xhr">XMLHttpRequest</button>
+//       <button data-t="ws">WebSocket</button>
+//       <button data-t="sse">EventSource</button>
+//       <button data-t="beacon">sendBeacon</button>
+//       <button data-t="img">Image.src</button>
+//       <hr/>
+//       <button data-t="all" style="font-weight:700;">全部テスト</button>
+//       <button data-t="ok" title="許可される(同一オリジン/データURL)制御テスト">制御テスト(許可想定)</button>
+//       <button data-t="close">パネル閉じる</button>
+//     </div>
+//   `;
+//   panel.querySelectorAll('button').forEach(b=>{
+//     b.style.cssText = 'padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;cursor:pointer';
+//     b.onmouseenter=()=>b.style.background='#eef2ff';
+//     b.onmouseleave=()=>b.style.background='#f8fafc';
+//   });
+//   document.body.appendChild(panel);
+
+//   const externalURL = 'https://example.com/';
+//   const externalImg = 'https://example.com/favicon.ico';
+//   const externalSSE = 'https://example.com/sse'; // 実SSEでなくてもブロック検知されればOK
+//   const externalWS  = 'wss://echo.websocket.events'; // 汎用のWSエコー。ガードがあれば接続前にブロックされる
+
+//   async function testFetch(){
+//     console.log('[TEST] fetch ->', externalURL);
+//     try{
+//       const res = await fetch(externalURL, {mode:'cors'});
+//       console.log('fetch result (unexpected if blocked):', res);
+//     }catch(e){
+//       console.warn('fetch blocked as expected:', e.message || e);
+//     }
+//   }
+
+//   function testXHR(){
+//     console.log('[TEST] XHR ->', externalURL);
+//     try{
+//       const xhr = new XMLHttpRequest();
+//       xhr.open('GET', externalURL, true);
+//       xhr.onload = ()=>console.log('XHR onload (unexpected if blocked)', xhr.status);
+//       xhr.onerror= ()=>console.warn('XHR error (expected when blocked)');
+//       xhr.send();
+//     }catch(e){
+//       console.warn('XHR blocked as expected:', e.message || e);
+//     }
+//   }
+
+//   function testWS(){
+//     console.log('[TEST] WebSocket ->', externalWS);
+//     try{
+//       const ws = new WebSocket(externalWS);
+//       ws.onopen  = ()=>console.log('WS open (unexpected if blocked)');
+//       ws.onerror = (ev)=>console.warn('WS error (expected when blocked)', ev);
+//       ws.onclose = ()=>console.warn('WS close');
+//     }catch(e){
+//       console.warn('WS blocked as expected:', e.message || e);
+//     }
+//   }
+
+//   function testSSE(){
+//     console.log('[TEST] EventSource ->', externalSSE);
+//     try{
+//       const es = new EventSource(externalSSE);
+//       es.onopen  = ()=>console.log('SSE open (unexpected if blocked)');
+//       es.onerror = (ev)=>console.warn('SSE error (expected when blocked)', ev);
+//     }catch(e){
+//       console.warn('SSE blocked as expected:', e.message || e);
+//     }
+//   }
+
+//   function testBeacon(){
+//     console.log('[TEST] sendBeacon ->', externalURL+'beacon');
+//     try{
+//       const ok = navigator.sendBeacon(externalURL+'beacon', 'hello');
+//       console.log('sendBeacon returned (false expected when blocked):', ok);
+//     }catch(e){
+//       console.warn('sendBeacon blocked as expected:', e.message || e);
+//     }
+//   }
+
+//   function testImage(){
+//     console.log('[TEST] Image.src ->', externalImg);
+//     const img = new Image();
+//     img.onload = ()=>console.log('Image loaded (unexpected if blocked)');
+//     img.onerror = ()=>console.warn('Image blocked/error as expected');
+//     img.src = externalImg;
+//   }
+
+//   // 許可される制御テスト（同一オリジン/データURL）
+//   async function testAllowedControl(){
+//     console.log('[CONTROL] dataURL image (should be allowed)');
+//     const img = new Image();
+//     img.onload = ()=>console.log('dataURL image loaded OK');
+//     img.onerror = ()=>console.warn('dataURL image error (unexpected)');
+//     img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAQAAACENnwnAAAAD0lEQVR4nGMAAQAABgABi0m8GQAAAABJRU5ErkJggg==';
+
+//     console.log('[CONTROL] same-origin fetch (should be allowed)');
+//     try{
+//       const res = await fetch(location.pathname, {cache:'no-store'});
+//       console.log('same-origin fetch OK (status):', res.status);
+//     }catch(e){
+//       console.warn('same-origin fetch blocked (unexpected):', e);
+//     }
+//   }
+
+//   async function runAll(){
+//     await testFetch();
+//     testXHR();
+//     testWS();
+//     testSSE();
+//     testBeacon();
+//     testImage();
+//   }
+
+//   panel.addEventListener('click', (e)=>{
+//     const t = e.target && e.target.getAttribute('data-t');
+//     if (!t) return;
+//     if (t==='fetch') testFetch();
+//     if (t==='xhr') testXHR();
+//     if (t==='ws') testWS();
+//     if (t==='sse') testSSE();
+//     if (t==='beacon') testBeacon();
+//     if (t==='img') testImage();
+//     if (t==='all') runAll();
+//     if (t==='ok') testAllowedControl();
+//     if (t==='close') panel.remove();
+//   });
+
+//   console.log('%c[Network Guard Tester] パネルを右下に表示しました。', 'color:#0ea5e9;font-weight:bold');
+// })();
+
+
+
+</script>
 </body>
 </html>
