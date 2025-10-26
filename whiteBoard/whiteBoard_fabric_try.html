@@ -500,6 +500,9 @@
     function importCanvasJSON(jsonText, cb){
       try{
         const parsed = JSON.parse(jsonText);
+        // canvas.loadFromJSON(parsed, () => {
+        // 旧データに含まれる blob:null 画像を除去してからロード
+        sanitizeFabricJSON(parsed);
         canvas.loadFromJSON(parsed, () => {
           attachGroupLabelPointers();
           const render = canvas.requestRenderAll || canvas.renderAll;
@@ -566,6 +569,48 @@
       canvas.backgroundColor = color;
       const render = canvas.requestRenderAll || canvas.renderAll;
       render.call(canvas);
+    }
+
+    // =========================
+    // Fabric JSON サニタイズ（blob:null 画像対策）
+    // =========================
+    /**
+     * Fabric JSON オブジェクト内から、復元不能な画像（src が blob:）を除去する。
+     * - 既存の古い保存データに含まれる blob:null/... を取り除き、読み込み失敗を防ぐ
+     * - グループ内も再帰的に処理。子が全滅したグループは除去。
+     * @param {object} parsed - canvas.loadFromJSON に渡す前の JSON オブジェクト
+     * @returns {object} 破壊的に編集後の同オブジェクトを返す
+     */
+    function sanitizeFabricJSON(parsed){
+      try{
+        const isBadImage = (o) => o && o.type === 'image'
+          && typeof o.src === 'string'
+          && o.src.startsWith('blob:'); // blob: は再ロード不可
+
+        const cleanArray = (arr) => {
+          const out = [];
+          for (const o of (arr || [])){
+            if (!o) continue;
+            if (isBadImage(o)) continue; // 破棄
+            // group 内の子オブジェクトもクリーン
+            if (Array.isArray(o.objects)){ // v6系で group は objects 配列
+              o.objects = cleanArray(o.objects);
+              // 子が空ならこの group 自体も除去
+              if (!o.objects.length) continue;
+            }else if (Array.isArray(o._objects)){ // 念のため旧キーも対応
+              o._objects = cleanArray(o._objects);
+              if (!o._objects.length) continue;
+            }
+            out.push(o);
+          }
+          return out;
+        };
+
+        if (Array.isArray(parsed.objects)){
+          parsed.objects = cleanArray(parsed.objects);
+        }
+      }catch(_){}
+      return parsed;
     }
 
     /**
@@ -997,6 +1042,7 @@
     async function generateThumbnailFromJSON(jsonText, targetW = PREVIEW_W, targetH = PREVIEW_H) {
       return new Promise(async (resolve, reject) => {
         try {
+          // ★ blob: 画像を除去してから生成
           // ---- オフスクリーン StaticCanvas 準備（null は渡さない）----
           const offscreen = document.createElement('canvas');
           offscreen.width = targetW;
@@ -1007,7 +1053,9 @@
             enableRetinaScaling: false, renderOnAddRemove: false
           });
 
-          const parsed = (typeof jsonText === 'string') ? JSON.parse(jsonText) : jsonText;
+          let parsed = (typeof jsonText === 'string') ? JSON.parse(jsonText) : jsonText;
+          // 既存データの blob:null 画像を除去
+          parsed = sanitizeFabricJSON(parsed);
           const objsRaw = Array.isArray(parsed?.objects) ? parsed.objects : [];
 
           // 背景
@@ -1461,6 +1509,91 @@
     }
 
     // =========================
+    // システムクリップボード（画像）貼り付け
+    // =========================
+    /**
+     * クリップボードから画像を取得してキャンバスへ貼り付ける。
+     * - navigator.clipboard.read() を利用（HTTPS/ユーザー操作前提）
+     * - PNG/JPEG の最初の画像を使用
+     * @param {{x:number,y:number}} dropPoint - 貼り付けるキャンバス座標
+     */
+    async function pasteImageFromClipboardAt(dropPoint){
+      // ブラウザ対応確認
+      if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function'){
+        alert('このブラウザではクリップボードからの画像貼り付け（Ctrl+Shift+V）に対応していません。');
+        return;
+      }
+      try{
+        const items = await navigator.clipboard.read();
+        // ClipboardItem の中から画像タイプを探す
+        let imageBlob = null;
+        outer: for (const item of items){
+          // types は MIME の配列。優先順に探す
+          const types = Array.isArray(item.types) ? item.types : [];
+          const preferred = ['image/png','image/jpeg','image/jpg','image/webp'];
+          for (const mime of preferred){
+            if (types.includes(mime)){
+              imageBlob = await item.getType(mime);
+              break outer;
+            }
+          }
+          // 汎用的に image/* を走査
+          if (!imageBlob){
+            for (const t of types){
+              if (t.startsWith('image/')){
+                imageBlob = await item.getType(t);
+                break outer;
+              }
+            }
+          }
+        }
+        if (!imageBlob){
+          alert('クリップボードに画像が見つかりませんでした。');
+          return;
+        }
+        // ★ Blob → DataURL 化（保存/復元に強い）
+        const dataURL = await new Promise((res, rej) => {
+          const fr = new FileReader();
+          fr.onload = () => res(String(fr.result||''));
+          fr.onerror = (e) => rej(e);
+          fr.readAsDataURL(imageBlob);
+        });
+        try {
+          const img = await fabric.Image.fromURL(dataURL); // v6: Promise API
+          // スケール（キャンバスの 60% を上限）
+          const maxW = canvas.getWidth() * 0.6;
+          const maxH = canvas.getHeight() * 0.6;
+          // 画像の自然サイズ（width/height は fromURL 解決後に利用可）
+          const iw = img.width || 1;
+          const ih = img.height || 1;
+          const scale = Math.min(1, maxW / iw, maxH / ih);
+          img.set({
+            originX: 'center',
+            originY: 'center',
+            left: dropPoint.x,
+            top: dropPoint.y,
+            scaleX: scale,
+            scaleY: scale,
+            objectCaching: false
+          });
+          canvas.add(img);
+          canvas.setActiveObject(img);
+          (canvas.requestRenderAll || canvas.renderAll).call(canvas);
+          scheduleAutosave();
+          pushHistory();
+        } catch (e) {
+          console.warn('fabric.Image.fromURL failed:', e);
+          alert('画像の貼り付けに失敗しました（fromURL）。ブラウザの制限やクリップボードの内容をご確認ください。');
+        // } finally {
+        //   URL.revokeObjectURL(url);
+        }
+      }catch(err){
+        console.warn('clipboard image paste failed:', err);
+        alert('クリップボードからの画像取得に失敗しました。ブラウザの権限設定や HTTPS での実行をご確認ください。');
+      }
+    }
+
+    // =========================
     // コピー / カット / ペースト（スロット跨ぎ対応）
     // =========================
     /**
@@ -1873,6 +2006,16 @@
       const code = ev.code || '';
       const active = canvas.getActiveObject();
       const isCtrl = ev.ctrlKey || ev.metaKey;
+
+      // Ctrl+Shift+V … クリップボード画像を貼り付け
+      // （ペンモード中は上の return で抜けるため無効）
+      if (isCtrl && ev.shiftKey && (keyLower === 'v' || code === 'KeyV')){
+        ev.preventDefault();
+        try{
+          pasteImageFromClipboardAt(getDropPoint());
+        }catch(e){ console.warn(e); }
+        return;
+      }
 
       // ペンモード時の Esc: 解除して終了
       if ((ev.key === 'Escape' || ev.code === 'Escape') && penMode){
