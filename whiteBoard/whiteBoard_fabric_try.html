@@ -56,8 +56,14 @@
       display:none;z-index:9999;background:#fff;border:1px solid rgba(0,0,0,.12);
       box-shadow:0 10px 24px rgba(2,6,23,.15);border-radius:10px;padding:6px;pointer-events:none;
     }
-    #slotPreview img{display:block;max-width:420px;max-height:270px;}
-    #slotPreview .caption{font-size:12px;color:#475569;margin-top:4px;text-align:center;}
+    #slotPreview .title{
+      font-size:13px;font-weight:700;color:#0b1323;text-align:center;margin:4px 6px 6px;
+    }
+    #slotPreview img{display:block;max-width:420px;max-height:270px;border-radius:6px;}
+    #slotPreview .meta{
+      font-size:12px;color:#475569;margin:6px 6px 2px;text-align:center;
+    }
+
   </style>
 </head>
 <body>
@@ -99,8 +105,9 @@
   </div>
 
   <div id="slotPreview" aria-hidden="true">
+    <div class="title"></div>
     <img alt="slot preview" />
-    <div class="caption"></div>
+    <div class="meta"></div>
   </div>
 
   <!-- Fabric.js v6.7.1 -->
@@ -351,7 +358,8 @@
     const pngBtn    = document.getElementById('pngBtn');
     const slotPreviewEl = document.getElementById('slotPreview');
     const slotPreviewImg = slotPreviewEl.querySelector('img');
-    const slotPreviewCaption = slotPreviewEl.querySelector('.caption');
+    const slotPreviewTitle = slotPreviewEl.querySelector('.title');
+    const slotPreviewMeta  = slotPreviewEl.querySelector('.meta');
     // ペンUI
     const penThinBtn  = document.getElementById('penThinBtn');
     const penMidBtn   = document.getElementById('penMidBtn');
@@ -879,6 +887,8 @@
       slotPreviewEl.style.display = 'none';
       // 古いサムネが残るのを防止
       slotPreviewImg.removeAttribute('src');
+      slotPreviewTitle.textContent = '';
+      slotPreviewMeta.textContent  = '';
     }
     /**
      * プレビューの表示位置をマウス座標に合わせて更新する。
@@ -912,19 +922,24 @@
       positionSlotPreview(e);
       // タイトル取得（null=未設定, ""=無題）
       const t = getSlotTitle(slotIndex);
-      if (t === null){
-        slotPreviewCaption.textContent = `スロット ${slotIndex+1}`;
-      }else{
-        slotPreviewCaption.textContent = t === '' ? `スロット ${slotIndex+1}` : t;
-      }
+      // if (t === null){
+      //   slotPreviewCaption.textContent = `スロット ${slotIndex+1}`;
+      // }else{
+      //   slotPreviewCaption.textContent = t === '' ? `スロット ${slotIndex+1}` : t;
+      // }
+      if (t === null) slotPreviewTitle.textContent = `スロット ${slotIndex+1}`;
+      else            slotPreviewTitle.textContent = (t === '' ? `スロット ${slotIndex+1}` : t);
       slotPreviewImg.removeAttribute('src'); // 古い残像を消す
+      // 最終更新（下部へ表示）
+      const metaRaw = localStorage.getItem(LS_KEY_META_PREFIX + slotIndex);
+      let updatedAt = null;
+      try { updatedAt = metaRaw ? (JSON.parse(metaRaw).updatedAt || null) : null; } catch(_){}
+      slotPreviewMeta.textContent = '最終更新: ' + formatDateLabel(updatedAt);
       slotPreviewEl.style.display = 'block';
 
       // 保存データとメタ（更新日時）を取得
       const json = localStorage.getItem(LS_KEY_PREFIX + slotIndex);
-      const metaRaw = localStorage.getItem(LS_KEY_META_PREFIX + slotIndex);
-      let updatedAt = null;
-      try { updatedAt = metaRaw ? (JSON.parse(metaRaw).updatedAt || null) : null; } catch(_){}
+      // キャッシュキーは更新日時も含めてOK（内容が変われば画像も作り直す）
       const cacheKey = `${slotIndex}|${updatedAt || 'none'}`;
 
       // ---- キャッシュがあれば即表示 ----
@@ -936,7 +951,8 @@
       if (!json){ hideSlotPreview(); return; }
 
       // ベースのサムネを生成後、更新日バッジを重ね描き
-      generateThumbnailWithUpdatedAt(json, updatedAt, PREVIEW_W, PREVIEW_H).then((dataURL) => {
+      // 純粋なサムネ（画像のみ）を生成
+      generateThumbnailFromJSON(json, PREVIEW_W, PREVIEW_H).then((dataURL) => {
         slotThumbCache.set(cacheKey, dataURL);
         // すでに枠は出ているので src を付け替えるだけ
         slotPreviewImg.src = dataURL;
@@ -968,6 +984,7 @@
       drawUpdatedAtBadge(c, updatedAtISO);
       return c.toDataURL('image/png');
     }
+    // ↑ 現在は使用しません（下部テキスト表示に移行）。必要があれば将来のために残置。
 
     /**
      * スロットボタン上にポップアップ表示するサムネイルを生成する。
@@ -1088,6 +1105,7 @@
     function drawUpdatedAtBadge(canvasEl, updatedAtISO){
       const ctx = canvasEl.getContext('2d');
       const text = '最終更新: ' + formatDateLabel(updatedAtISO);
+      // 現在は未使用：画像へのバッジ描画は廃止し、枠下部にテキスト表示へ移行
       ctx.font = BADGE_FONT;
       const padX = BADGE_PAD_X;
       const padY = BADGE_PAD_Y;
