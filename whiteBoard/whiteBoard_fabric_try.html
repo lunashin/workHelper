@@ -44,6 +44,11 @@
     .toolbar-button{padding:6px 12px;border:1px solid #cfd6e3;border-radius:8px;background:#ffffff;font-weight:600;cursor:pointer;}
     .toolbar-button:hover{background:#f6f8fc;}
     .spacer{flex:1 1 auto;}
+    /* ペンツールの見た目 */
+    .pen-btn{min-width:38px}
+    .pen-btn.active{background:#e8f6fd;border-color:#0ea5e9;box-shadow:0 0 0 2px rgba(14,165,233,.2) inset;color:#0ea5e9}
+    #penColor{width:36px;height:32px;padding:0;border-radius:8px;border:1px solid #cfd6e3;cursor:pointer}
+    #penColor::-webkit-color-swatch{border:none;border-radius:6px}
 
     /* スロットサムネプレビュー */
     #slotPreview{
@@ -79,6 +84,12 @@
     <button id="pngBtn" class="toolbar-button" type="button">PNG出力</button>
     <button id="importBtn" class="toolbar-button" type="button">JSONインポート</button>
     <button id="exportBtn" class="toolbar-button" type="button">JSONエクスポート</button>
+    <!-- ペン：太さ3種 & 色 -->
+    <div style="width:1px;height:28px;background:#e5e7eb;margin:0 6px"></div>
+    <button id="penThinBtn"  class="toolbar-button pen-btn" type="button" title="細ペン">✎ 細</button>
+    <button id="penMidBtn"   class="toolbar-button pen-btn" type="button" title="中ペン">✎ 中</button>
+    <button id="penThickBtn" class="toolbar-button pen-btn" type="button" title="太ペン">✎ 太</button>
+    <input  id="penColor" type="color" value="#111827" title="ペン色" />
     <button id="titleBtn" class="toolbar-button" type="button">タイトル変更</button>
     <button id="clearBtn" class="toolbar-button" type="button">クリア</button>
   </div>
@@ -341,6 +352,11 @@
     const slotPreviewEl = document.getElementById('slotPreview');
     const slotPreviewImg = slotPreviewEl.querySelector('img');
     const slotPreviewCaption = slotPreviewEl.querySelector('.caption');
+    // ペンUI
+    const penThinBtn  = document.getElementById('penThinBtn');
+    const penMidBtn   = document.getElementById('penMidBtn');
+    const penThickBtn = document.getElementById('penThickBtn');
+    const penColorInp = document.getElementById('penColor');
 
     // =========================
     // Fabric Canvas 初期化
@@ -349,6 +365,60 @@
       backgroundColor: '#ffffff',
       selection: true,
       preserveObjectStacking: true
+    });
+
+    // =========================
+    // ペンモード
+    // =========================
+    let penMode = false;
+    let penWidth = 2;       // 既定の太さ
+    let penColor = '#111827';
+
+    function applyPenBrush(){
+      // Fabric v6: PencilBrush はデフォルトで利用可
+      canvas.isDrawingMode = true;
+      canvas.freeDrawingBrush = new fabric.PencilBrush(canvas);
+      canvas.freeDrawingBrush.width = penWidth;
+      canvas.freeDrawingBrush.color = penColor;
+    }
+    function setPenUIActive(targetBtn){
+      [penThinBtn, penMidBtn, penThickBtn].forEach(b=>b.classList.toggle('active', b===targetBtn && penMode));
+    }
+    function enterPenMode(width, fromBtn){
+      penWidth = width;
+      penColor = penColorInp.value || penColor;
+      penMode = true;
+      // 選択系を無効化（図形の選択不可）
+      canvas.discardActiveObject();
+      canvas.selection = false;
+      canvas.skipTargetFind = true;
+      applyPenBrush();
+      setPenUIActive(fromBtn || null);
+    }
+    function exitPenMode(){
+      if (!penMode) return;
+      penMode = false;
+      canvas.isDrawingMode = false;
+      // 選択系を元に戻す
+      canvas.selection = true;
+      canvas.skipTargetFind = false;
+      setPenUIActive(null);
+      (canvas.requestRenderAll || canvas.renderAll).call(canvas);
+    }
+    // ペンUIイベント
+    penThinBtn.addEventListener('click',  ()=> enterPenMode(2,  penThinBtn));
+    penMidBtn .addEventListener('click',  ()=> enterPenMode(5,  penMidBtn));
+    penThickBtn.addEventListener('click', ()=> enterPenMode(10, penThickBtn));
+    penColorInp.addEventListener('input', ()=>{
+      penColor = penColorInp.value || penColor;
+      if (penMode && canvas.freeDrawingBrush){
+        canvas.freeDrawingBrush.color = penColor;
+      }
+    });
+    // 手描き完了時にオートセーブ＆履歴
+    canvas.on('path:created', ()=>{
+      scheduleAutosave();
+      pushHistoryDebounced();
     });
 
     /**
@@ -1725,6 +1795,9 @@
       editLabelByDblClick(target);
     });
     canvas.on('mouse:down', (evt) => {
+      // ペンモード中は図形確定などのクリック系処理は無効化（描画のみ）
+      if (penMode) return;
+
       // if (finalizeLineDrawingIfNeeded(evt.e)) return;
       if (finalizeStrokeDrawingIfNeeded(evt.e)) return;
       if (!evt.target){ canvas.discardActiveObject(); canvas.renderAll(); }
@@ -1782,6 +1855,15 @@
       const code = ev.code || '';
       const active = canvas.getActiveObject();
       const isCtrl = ev.ctrlKey || ev.metaKey;
+
+      // ペンモード時の Esc: 解除して終了
+      if ((ev.key === 'Escape' || ev.code === 'Escape') && penMode){
+        ev.preventDefault();
+        exitPenMode();
+        return;
+      }
+      // ペンモード中は以降のショートカットを原則無効化
+      if (penMode) return;
 
       // --- Copy / Cut / Paste ---
       if (isCtrl && keyLower === 'c'){
@@ -1842,6 +1924,7 @@
         ev.preventDefault(); startStrokeDrawing({ mode:'line', dashed:true }); return;
       }
 
+      // （Esc のズーム/リセットは、ペンモード時は上の分岐で消化）
       // Esc: 矢印描画キャンセル
       if (strokeDraw.mode && (keyLower==='escape' || code==='Escape')){ ev.preventDefault(); cancelStrokePreview(true); return; }
 
@@ -2018,6 +2101,8 @@
     canvasEl.focus({preventScroll:true});
     resetHistoryBaseline();
     keepOriginMarkerBack();
+    // ペンUI初期状態
+    setPenUIActive(null);
 
   })();
 
