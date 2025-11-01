@@ -1593,6 +1593,85 @@
       }
     }
 
+    /**
+     * 選択中オブジェクトのうち、テキストを持つ要素の fontWeight を
+     * 'bold' と 'normal' でトグルする。
+     * - 単体 Text / Textbox
+     * - ラベル付きグループ（_label に Text を持つ）
+     */
+    function toggleBoldOnSelection(){
+      const targets = canvas.getActiveObjects() || [];
+      if (!targets.length) return;
+      let changed = false;
+      const applyToggle = (txt) => {
+        if (!txt) return;
+        const cur = (txt.fontWeight || 'normal');
+        const next = (String(cur).toLowerCase() === 'bold') ? 'normal' : 'bold';
+        txt.set({ fontWeight: next });
+        changed = true;
+      };
+      for (const obj of targets){
+        if (obj.type === 'textbox' || obj.type === 'text'){
+          applyToggle(obj);
+        } else if (obj.type === 'group'){
+          // ラベル(Text)を持つグループ（四角/円/菱形など）
+          const label = obj._label || (obj._objects && obj._objects.find(o => o.type==='text'));
+          if (label) applyToggle(label);
+        }
+      }
+      if (changed){
+        targets.forEach(o => o.setCoords && o.setCoords());
+        (canvas.requestRenderAll || canvas.renderAll).call(canvas);
+        scheduleAutosave();
+        pushHistoryDebounced();
+      }
+    }
+
+    /**
+     * 選択中の「テキストを含む図形」（矩形/円/菱形/テキスト等・※画像は対象外）から
+     * テキストを抽出し、1図形1行・Y座標の小さい順に並べてクリップボードへコピー。
+     */
+    async function copyTextsFromSelectedShapes(){
+      const targets = canvas.getActiveObjects() || [];
+      if (!targets.length) return;
+      // 画像は対象外
+      const figures = targets.filter(o => o.type !== 'image');
+      if (!figures.length){
+        alert('選択中に対象となる図形（テキストを含む矩形/円/菱形/テキスト等）がありません。');
+        return;
+      }
+      const extractText = (obj) => {
+        if (!obj) return '';
+        if (obj.type === 'textbox' || obj.type === 'text') return String(obj.text || '');
+        if (obj.type === 'group'){
+          const label = obj._label || (obj._objects && obj._objects.find(o => o.type==='text' || o.type==='textbox'));
+          return label ? String(label.text || '') : '';
+        }
+        return '';
+      };
+      // y座標(外接矩形 top)で昇順ソート
+      const entries = figures.map(o => ({ o, text: extractText(o).trim() }));
+      entries.sort((a,b)=>{
+        const ra = a.o.getBoundingRect(true, true);
+        const rb = b.o.getBoundingRect(true, true);
+        return (ra.top - rb.top);
+      });
+      // 空行は残す/落とすは要件次第だが、基本は非空のみコピー
+      const lines = entries.map(e => e.text.replace(/\r?\n/g, ' ')).filter(s => s.length>0);
+      if (!lines.length){
+        alert('抽出できるテキストがありません。');
+        return;
+      }
+      const payload = lines.join('\n');
+      try{
+        await navigator.clipboard.writeText(payload);
+        console.log('[SHAPE TEXT] Copied lines:', payload);
+      }catch(err){
+        console.warn('clipboard writeText failed:', err);
+        alert('テキストのクリップボード書き込みに失敗しました。');
+      }
+    }
+
     // =========================
     // コピー / カット / ペースト（スロット跨ぎ対応）
     // =========================
@@ -2014,6 +2093,21 @@
         try{
           pasteImageFromClipboardAt(getDropPoint());
         }catch(e){ console.warn(e); }
+        return;
+      }
+
+      // Ctrl + B … 選択テキストの太字/通常トグル
+      if (isCtrl && (keyLower === 'b' || code === 'KeyB')){
+        ev.preventDefault();
+        toggleBoldOnSelection();
+        return;
+      }
+
+      // Ctrl + Shift + C … 選択中の「テキストを含む図形」から文字抽出→クリップボードへ
+      // （1図形1行、Y座標が小さい順／画像は対象外）
+      if (isCtrl && ev.shiftKey && (keyLower === 'c' || code === 'KeyC')){
+        ev.preventDefault();
+        copyTextsFromSelectedShapes();
         return;
       }
 
