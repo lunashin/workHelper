@@ -64,6 +64,23 @@
       font-size:12px;color:#475569;margin:6px 6px 2px;text-align:center;
     }
 
+    /* ------ モーダル ------ */
+    .modal-overlay{
+      position:fixed;inset:0;background:rgba(2,6,23,.3);display:none;z-index:10000;
+    }
+    .modal{
+      position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);
+      background:#fff;border:1px solid #cfd6e3;border-radius:10px;
+      box-shadow:0 12px 28px rgba(2,6,23,.2);padding:14px;min-width:340px;
+    }
+    .modal h3{margin:0 0 10px 0;font-size:16px}
+    .modal .row{display:flex;gap:8px;align-items:center;margin:10px 0}
+    .modal .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:12px}
+    .modal select{padding:6px 8px;border:1px solid #cfd6e3;border-radius:8px}
+    .btn{padding:6px 12px;border:1px solid #cfd6e3;border-radius:8px;background:#fff;font-weight:600;cursor:pointer}
+    .btn:hover{background:#f6f8fc}
+    .btn.primary{border-color:#0ea5e9;color:#0ea5e9;background:#e8f6fd}
+
   </style>
 </head>
 <body>
@@ -97,6 +114,8 @@
     <button id="penThickBtn" class="toolbar-button pen-btn" type="button" title="太ペン">✎ 太</button>
     <input  id="penColor" type="color" value="#111827" title="ペン色" />
     <button id="titleBtn" class="toolbar-button" type="button">タイトル変更</button>
+    <button id="moveSlotBtn" class="toolbar-button" type="button">スロット移動</button>
+    <button id="keyHelpBtn" class="toolbar-button" type="button">キー一覧</button>
     <button id="clearBtn" class="toolbar-button" type="button">クリア</button>
   </div>
 
@@ -108,6 +127,25 @@
     <div class="title"></div>
     <img alt="slot preview" />
     <div class="meta"></div>
+  </div>
+
+  <!-- スロット移動モーダル（外側クリックでは閉じない） -->
+  <div id="moveModalOv" class="modal-overlay" aria-hidden="true">
+    <div id="moveModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="moveTitle">
+      <h3 id="moveTitle">スロット移動</h3>
+      <div class="row">
+        <label for="moveTo">移動先スロット：</label>
+        <select id="moveTo"></select>
+      </div>
+      <div class="actions">
+        <button id="moveOk" class="btn primary" type="button">OK</button>
+        <button id="moveCancel" class="btn" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <!-- キー一覧モーダル（外側クリックで閉じる） -->
+  <div id="keyHelpOv" class="modal-overlay" aria-hidden="true">
+    <div id="keyHelp" class="modal" role="dialog" aria-modal="true" aria-labelledby="keyHelpTitle"></div>
   </div>
 
   <!-- Fabric.js v6.7.1 -->
@@ -357,6 +395,14 @@
     const titleBtn  = document.getElementById('titleBtn');
     const pngBtn    = document.getElementById('pngBtn');
     const slotPreviewEl = document.getElementById('slotPreview');
+    // 移動/キー一覧モーダル
+    const moveBtn   = document.getElementById('moveSlotBtn');
+    const moveOv    = document.getElementById('moveModalOv');
+    const moveDlg   = document.getElementById('moveModal');
+    const moveSel   = document.getElementById('moveTo');
+    const moveOk    = document.getElementById('moveOk');
+    const moveCancel= document.getElementById('moveCancel');
+    const keyHelpBtn= document.getElementById('keyHelpBtn');
     const slotPreviewImg = slotPreviewEl.querySelector('img');
     const slotPreviewTitle = slotPreviewEl.querySelector('.title');
     const slotPreviewMeta  = slotPreviewEl.querySelector('.meta');
@@ -570,6 +616,142 @@
       const render = canvas.requestRenderAll || canvas.renderAll;
       render.call(canvas);
     }
+
+    // =========================
+    // スロット移動（空きスロットへ MOVE）
+    // =========================
+    let moveModalKeydownHandler = null;
+
+    function openMoveModal(){
+      // ドロップダウン初期化（現在スロットを初期選択）
+      moveSel.innerHTML = '';
+      for (let i=0;i<SLOT_COUNT;i++){
+        // 空きスロットのみ選択可能（埋まっている場合は disabled）
+        const has = slotHasData(i);
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `スロット ${i+1}` + (has ? '（使用中）' : '');
+        opt.disabled = has;
+        moveSel.appendChild(opt);
+      }
+      moveSel.value = String(currentSlot);
+      moveOv.style.display = 'block';
+      // フォーカスをセレクトに当てて Enter 操作を受けやすくする
+      try { moveSel.focus({ preventScroll:true }); } catch(_){}
+      // キーハンドラ（Esc=Cancel / Enter=OK）
+      moveModalKeydownHandler = (e)=>{
+        if (e.isComposing) return;
+        const key = (e.key || '').toLowerCase();
+        if (key === 'escape'){
+          e.preventDefault(); e.stopPropagation();
+          closeMoveModal();
+        } else if (key === 'enter'){
+          e.preventDefault(); e.stopPropagation();
+          performMoveTo(moveSel.value);
+        }
+      };
+      window.addEventListener('keydown', moveModalKeydownHandler, true);
+    }
+    function closeMoveModal(){
+      moveOv.style.display = 'none';
+      // 開いている間だけ有効だったキーハンドラを解除
+      if (moveModalKeydownHandler){
+        window.removeEventListener('keydown', moveModalKeydownHandler, true);
+        moveModalKeydownHandler = null;
+      }
+    }
+    function performMoveTo(target){
+      const dst = Number(target);
+      if (Number.isNaN(dst) || dst<0 || dst>=SLOT_COUNT) return;
+      if (dst === currentSlot) { closeMoveModal(); return; }
+      // 既に使用中は防止（UI側でも disabled 済）
+      if (slotHasData(dst)){
+        alert('選択したスロットは既に使用中です。空きスロットを選択してください。');
+        return;
+      }
+      const src = currentSlot;
+      // 元スロットの JSON / meta / title をそのまま移動（updatedAt は変更しない）
+      const json = localStorage.getItem(LS_KEY_PREFIX + src);
+      const meta = localStorage.getItem(LS_KEY_META_PREFIX + src);
+      const title= localStorage.getItem(LS_KEY_TITLE_PREFIX + src);
+      if (!json){
+        alert('移動するデータがありません。');
+        closeMoveModal();
+        return;
+      }
+      try{
+        localStorage.setItem(LS_KEY_PREFIX + dst, json);
+        if (meta !== null) localStorage.setItem(LS_KEY_META_PREFIX + dst, meta);
+        else               localStorage.removeItem(LS_KEY_META_PREFIX + dst);
+        if (title!== null) localStorage.setItem(LS_KEY_TITLE_PREFIX + dst, title);
+        else               localStorage.removeItem(LS_KEY_TITLE_PREFIX + dst);
+        // 元をクリア
+        localStorage.removeItem(LS_KEY_PREFIX + src);
+        localStorage.removeItem(LS_KEY_META_PREFIX + src);
+        localStorage.removeItem(LS_KEY_TITLE_PREFIX + src);
+      }catch(e){
+        console.error('slot move failed:', e);
+        alert('スロット移動に失敗しました。');
+        return;
+      }
+      // UI更新：移動先を選択状態に
+      closeMoveModal();
+      selectSlot(dst);
+      refreshSlotButtonsUI();
+    }
+    // イベントバインド（モーダル外クリックは無効：OK/Cancelのみ）
+    moveBtn.addEventListener('click', openMoveModal);
+    moveOk.addEventListener('click', () => performMoveTo(moveSel.value));
+    moveCancel.addEventListener('click', closeMoveModal);
+
+    // =========================
+    // キー一覧（外側クリックで閉じる）
+    // =========================
+    const keyHelpOv = document.getElementById('keyHelpOv');
+    const keyHelpEl = document.getElementById('keyHelp');
+    function openKeyHelp(){
+      keyHelpEl.innerHTML = `
+        <h3 id="keyHelpTitle">キー一覧</h3>
+        <div style="font-size:13px;line-height:1.7">
+          <b>基本</b><br/>
+          c: 円 / s: 四角 / r: 菱形 / t: テキスト / a: 矢印開始 / Shift+A: 実線 / q: 点線<br/>
+          Ctrl+Z: Undo / Ctrl+Shift+Z: Redo / Ctrl+A: すべて選択 / d or Delete: 削除<br/>
+          Space: 色変更 / Enter: テキスト編集 / Ctrl+D: 複製 / Ctrl+C,V,X: コピー/貼付/カット<br/>
+          Ctrl+Shift+V: 画像貼付 / Ctrl+B: 太字トグル / Ctrl+Shift+C: 図形テキストをコピー<br/>
+          矢印プレビュー：水平・垂直にスナップ（近い軸）<br/>
+          ズーム：Ctrl+ホイール / パン：ホイール（横はトラックパッド）/ Ctrl+Shift+ホイール：左右パン
+        </div>
+        <div class="actions" style="margin-top:12px">
+          <button class="btn" type="button" id="keyHelpClose">閉じる</button>
+        </div>`;
+      keyHelpOv.style.display = 'block';
+      keyHelpEl.querySelector('#keyHelpClose').onclick = closeKeyHelp;
+    }
+
+    function closeKeyHelp(){
+      keyHelpOv.style.display = 'none';
+      // キー一覧用の Esc ハンドラを解除
+      if (keyHelpKeydownHandler){
+        window.removeEventListener('keydown', keyHelpKeydownHandler, true);
+        keyHelpKeydownHandler = null;
+      }
+    }
+
+    keyHelpBtn.addEventListener('click', openKeyHelp);
+    // 外側クリックで閉じる
+    keyHelpOv.addEventListener('click', (e)=>{ if (e.target === keyHelpOv) closeKeyHelp(); });
+    // Esc で閉じる（表示中のみ有効）
+    let keyHelpKeydownHandler = null;
+    keyHelpBtn.addEventListener('click', ()=>{
+      // 既存があれば一旦解除してから付け直す
+      if (keyHelpKeydownHandler){
+        window.removeEventListener('keydown', keyHelpKeydownHandler, true);
+      }
+      keyHelpKeydownHandler = (e)=>{
+        if ((e.key||'').toLowerCase() === 'escape'){ e.preventDefault(); e.stopPropagation(); closeKeyHelp(); }
+      };
+      window.addEventListener('keydown', keyHelpKeydownHandler, true);
+    });
 
     // =========================
     // Fabric JSON サニタイズ（blob:null 画像対策）
@@ -1593,6 +1775,18 @@
       }
     }
 
+    // ActiveSelection(1件) を素オブジェクトに“ほぐす”ユーティリティ
+    function unwrapSingleSelection(obj){
+      if (!obj) return obj;
+      if (obj.type === 'activeselection'){
+        const arr = obj._objects || obj._objects;
+        if (Array.isArray(arr) && arr.length === 1){
+          return arr[0];
+        }
+      }
+      return obj;
+    }
+
     /**
      * 選択中オブジェクトのうち、テキストを持つ要素の fontWeight を
      * 'bold' と 'normal' でトグルする。
@@ -1916,6 +2110,7 @@
 
       if (group){
         labelText = group._label || (group._objects ? group._objects.find(o=>o.type==='text') : null);
+        if (!labelText) { labelText = (group._objects ? group._objects.find(o=>o.type==='textbox') : null); }
         if (!labelText) return;
       }else if (isTextOnly){
         labelText = targetObject;
@@ -2232,7 +2427,11 @@
       if (keyLower==='d'){ ev.preventDefault(); removeSelected(); return; }
 
       // Enter: テキスト編集
-      if (keyLower==='enter' || code==='Enter'){ ev.preventDefault(); if (active) editLabelByDblClick(active); scheduleAutosave(); pushHistoryDebounced(); return; }
+      if (keyLower==='enter' || code==='Enter'){
+        ev.preventDefault();
+        if (active) editLabelByDblClick(unwrapSingleSelection(active));
+        scheduleAutosave(); pushHistoryDebounced(); return;
+      }
 
       // Space: 色
       if (keyLower===' ' || keyLower==='spacebar' || code==='Space'){ ev.preventDefault(); if (active) cycleFillColor(active); scheduleAutosave(); pushHistoryDebounced(); return; }
