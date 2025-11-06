@@ -84,38 +84,26 @@
   </style>
 </head>
 <body>
-  <header id="header">
-    <div>
-      <span class="kbd">c</span> 円 /
-      <span class="kbd">s</span> 四角 /
-      <span class="kbd">r</span> 菱形 /
-      <span class="kbd">t</span> テキスト /
-      <span class="kbd">a</span> 線
-    </div>
-    <div>
-      <span class="kbd">Ctrl|⌘ + Z</span> Undo /
-      <span class="kbd">Ctrl|⌘ + Shift + Z</span> Redo /
-      <span class="kbd">Ctrl|⌘ + A</span> すべて選択 /
-      <span class="kbd">d</span> 選択削除
-    </div>
-  </header>
-
+  <header id="header"></header>
   <div id="toolbar" aria-label="保存スロットとエクスポート">
     <div id="slotButtons"></div>
     <div class="spacer"></div>
-    <button id="imageBtn" class="toolbar-button" type="button">画像挿入</button>
-    <button id="pngBtn" class="toolbar-button" type="button">PNG出力</button>
-    <button id="importBtn" class="toolbar-button" type="button">JSONインポート</button>
-    <button id="exportBtn" class="toolbar-button" type="button">JSONエクスポート</button>
-    <!-- ペン：太さ3種 & 色 -->
     <div style="width:1px;height:28px;background:#e5e7eb;margin:0 6px"></div>
+    <div class="spacer"></div>
     <button id="penThinBtn"  class="toolbar-button pen-btn" type="button" title="細ペン">✎ 細</button>
     <button id="penMidBtn"   class="toolbar-button pen-btn" type="button" title="中ペン">✎ 中</button>
     <button id="penThickBtn" class="toolbar-button pen-btn" type="button" title="太ペン">✎ 太</button>
     <input  id="penColor" type="color" value="#111827" title="ペン色" />
+    <div style="width:1px;height:28px;background:#e5e7eb;margin:0 6px"></div>
+    <button id="keyHelpBtn" class="toolbar-button" type="button">キー一覧</button>
+    <div style="width:1px;height:28px;background:#e5e7eb;margin:0 6px"></div>
+    <!-- <button id="imageBtn" class="toolbar-button" type="button">画像挿入</button> -->
+    <button id="pngBtn" class="toolbar-button" type="button">PNG出力</button>
+    <button id="importBtn" class="toolbar-button" type="button">JSONインポート</button>
+    <button id="exportBtn" class="toolbar-button" type="button">JSONエクスポート</button>
+    <div style="width:1px;height:28px;background:#e5e7eb;margin:0 6px"></div>
     <button id="titleBtn" class="toolbar-button" type="button">タイトル変更</button>
     <button id="moveSlotBtn" class="toolbar-button" type="button">スロット移動</button>
-    <button id="keyHelpBtn" class="toolbar-button" type="button">キー一覧</button>
     <button id="clearBtn" class="toolbar-button" type="button">クリア</button>
   </div>
 
@@ -389,7 +377,7 @@
     const toolbarEl = document.getElementById('toolbar');
     const slotButtonsEl = document.getElementById('slotButtons');
     const exportBtn = document.getElementById('exportBtn');
-    const imageBtn  = document.getElementById('imageBtn');
+    // const imageBtn  = document.getElementById('imageBtn');
     const importBtn = document.getElementById('importBtn');
     const clearBtn  = document.getElementById('clearBtn');
     const titleBtn  = document.getElementById('titleBtn');
@@ -2121,7 +2109,33 @@
       if (nextText === null) return;
 
       // labelText.set({ text: nextText, textAlign:'center', originX:'center', originY:'center' });
-      labelText.set({ text: nextText, textAlign:'center' });
+      // labelText.set({ text: nextText, textAlign:'center' });
+      // labelText.set({ text: nextText });
+
+      // テキスト反映
+      labelText.set({ text: nextText });
+
+      // ★ Textbox は幅を内容にフィットさせる（短くした場合にも縮める）
+      //   Fabric v6 では initDimensions() 実行で dynamicMinWidth が更新されるため、
+      //   それを幅に反映して折り返しを最小化する。
+      if (labelText.type === 'textbox'){
+        try{
+          if (typeof labelText.initDimensions === 'function'){
+            labelText.initDimensions(); // dynamicMinWidth を再計算
+          }
+          if (typeof labelText.dynamicMinWidth === 'number' && isFinite(labelText.dynamicMinWidth)){
+            // ほんの少しの余白を足して折り返しを防ぐ
+            labelText.set({ width: Math.ceil(labelText.dynamicMinWidth + 2) });
+          }else{
+            // フォールバック：非変形寸法から横幅を取得
+            const dim = (typeof labelText._getNonTransformedDimensions === 'function')
+              ? labelText._getNonTransformedDimensions()
+              : { x: labelText.getScaledWidth() / (labelText.scaleX||1) };
+            labelText.set({ width: Math.max(1, Math.ceil(dim.x)) });
+          }
+        }catch(_){}
+      }
+
       if (group){ centerGroupLabel(group); }
       (group || labelText).setCoords();
       canvas.renderAll();
@@ -2456,32 +2470,32 @@
       document.body.appendChild(a); a.click(); a.remove();
     });
 
-    // 画像挿入
-    imageBtn.addEventListener('click', () => {
-      const input = document.createElement('input');
-      input.type = 'file'; input.accept = 'image/*';
-      input.onchange = () => {
-        const file = input.files && input.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataURL = String(reader.result || ''); if (!dataURL) return;
-          fabric.Image.fromURL(dataURL, (img) => {
-            const drop = getDropPoint();
-            const maxW = canvas.getWidth()*0.6, maxH = canvas.getHeight()*0.6;
-            const scale = Math.min(1, maxW/img.width, maxH/img.height);
-            img.set({ originX:'center', originY:'center', left:drop.x, top:drop.y, scaleX:scale, scaleY:scale, objectCaching:false });
-            canvas.add(img);
-            canvas.setActiveObject(img);
-            const render = canvas.requestRenderAll || canvas.renderAll;
-            render.call(canvas);
-            scheduleAutosave(); pushHistory();
-          }, { crossOrigin: null });
-        };
-        reader.readAsDataURL(file);
-      };
-      input.click();
-    });
+    // // 画像挿入
+    // imageBtn.addEventListener('click', () => {
+    //   const input = document.createElement('input');
+    //   input.type = 'file'; input.accept = 'image/*';
+    //   input.onchange = () => {
+    //     const file = input.files && input.files[0];
+    //     if (!file) return;
+    //     const reader = new FileReader();
+    //     reader.onload = () => {
+    //       const dataURL = String(reader.result || ''); if (!dataURL) return;
+    //       fabric.Image.fromURL(dataURL, (img) => {
+    //         const drop = getDropPoint();
+    //         const maxW = canvas.getWidth()*0.6, maxH = canvas.getHeight()*0.6;
+    //         const scale = Math.min(1, maxW/img.width, maxH/img.height);
+    //         img.set({ originX:'center', originY:'center', left:drop.x, top:drop.y, scaleX:scale, scaleY:scale, objectCaching:false });
+    //         canvas.add(img);
+    //         canvas.setActiveObject(img);
+    //         const render = canvas.requestRenderAll || canvas.renderAll;
+    //         render.call(canvas);
+    //         scheduleAutosave(); pushHistory();
+    //       }, { crossOrigin: null });
+    //     };
+    //     reader.readAsDataURL(file);
+    //   };
+    //   input.click();
+    // });
 
     // クリア
     clearBtn.addEventListener('click', () => {
