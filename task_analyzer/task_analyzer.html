@@ -134,11 +134,11 @@ report.docx\t6/15/2024 7:48 PM"></textarea>
       <!-- 右：出力テーブル -->
       <div class="right">
         <div class="card out-card">
-          <h2>出力（名称｜日時｜データ種類｜カテゴリ名｜詳細）</h2>
+          <h2>出力（日時｜名称｜データ種類｜カテゴリ名｜詳細）</h2>
           <div class="table-scroll">
             <table id="outTable" aria-live="polite">
               <thead>
-                <tr><th>名称</th><th>日時</th><th>データ種類</th><th>カテゴリ名</th><th>詳細</th></tr>
+                <tr><th>日時</th><th>名称</th><th>データ種類</th><th>カテゴリ名</th><th>詳細</th></tr>
               </thead>
               <tbody id="outBody">
                 <tr><td class="muted" colspan="5">まだ出力がありません。</td></tr>
@@ -290,15 +290,15 @@ report.docx\t6/15/2024 7:48 PM"></textarea>
     for(const r of rows){
       const tr = document.createElement('tr');
       // 列順：名称｜日時｜データ種類｜カテゴリ名｜詳細
-      tr.innerHTML = `<td>${r.name}</td><td>${r.whenStr}</td><td>${r.type}</td><td>${r.category||''}</td><td>${r.detail||''}</td>`;
+      tr.innerHTML = `<td>${r.whenStr}</td><td>${r.name}</td><td>${r.type}</td><td>${r.category||''}</td><td>${r.detail||''}</td>`;
       tbody.appendChild(tr);
     }
   }
   function downloadCSV(rows){
-    const header = ['名称','日時','データ種類','カテゴリ名','詳細'];
+    const header = ['名称','データ種類','日時','時間1','時間2','カテゴリ名','詳細'];
     const escape = (s) => `"${String(s).replace(/"/g,'""')}"`;
     const csv = [header.join(',')].concat(
-      rows.map(r=>`${escape(r.name)},${escape(r.whenStr)},${escape(r.type)},${escape(r.category||'')},${escape(r.detail||'')}`)
+      rows.map(r=>`${escape(r.name)},${escape(r.type)},${escape(r.whenStr)},,,${escape(r.category||'')},${escape(r.detail||'')}`)
     ).join('\r\n');
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
     const url = URL.createObjectURL(blob);
