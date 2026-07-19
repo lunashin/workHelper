@@ -583,6 +583,94 @@
 
 
 
+    // ========================================
+    // ShapeManager
+    // Canvasへの追加・描画管理
+    // ========================================
+    class ShapeManager {
+      constructor(canvas){
+        this.canvas = canvas;
+      }
+
+      /**
+       * ラベル付き図形追加
+       */
+      addShape(shape){
+        const group = GroupFactory.create([shape]);
+        this.canvas.add(group);
+        this.afterAdd(group);
+        return group;
+      }
+
+      /**
+       * テキスト追加
+       */
+      addText(text){
+        const drop = getDropPoint();
+        const tb = ShapeFactory.text(
+          drop.x,
+          drop.y,
+          text
+        );
+        this.canvas.add(tb);
+        this.afterAdd(tb);
+        return tb;
+      }
+
+      /**
+       * 共通後処理
+       */
+      afterAdd(obj){
+        this.canvas.setActiveObject(obj);
+        scheduleAutosave();
+        pushHistoryDebounced();
+        const render =
+          this.canvas.requestRenderAll ||
+          this.canvas.renderAll;
+        render.call(this.canvas);
+      }
+    }
+
+
+
+    // ========================================
+    // GroupFactory
+    // 図形にテキストを追加した図形グループ作成
+    // ========================================
+    class GroupFactory {
+      static create(shapes){
+        shapes.forEach(o => o.set({ objectCaching:false, globalCompositeOperation:'source-over' }));
+
+        const dropPoint = getDropPoint();
+        const labelText = ShapeFactory.textInnterRect();
+        const group = new fabric.Group([...shapes, labelText], { ...groupOptions, left: dropPoint.x, top: dropPoint.y, globalCompositeOperation:'source-over' });
+        group._label = labelText;
+
+        this.center(group);
+
+        return group;
+      }
+
+      static center(group) {
+        if (!group || !group._label) return;
+        const br = group.getBoundingRect(true, true);
+        const centerCanvas = new fabric.Point(br.left + br.width/2, br.top + br.height/2);
+        const m  = group.calcTransformMatrix();
+        const im = fabric.util.invertTransform(m);
+        const centerLocal = fabric.util.transformPoint(centerCanvas, im);
+        group._label.set({ originX:'center', originY:'center', left:centerLocal.x, top:centerLocal.y, textAlign:'center' });
+        group.setCoords();
+      }
+
+
+    }
+
+
+    // shapeManager初期化
+    const shapeManager = new ShapeManager(canvas);
+
+
+
     /**
      * ビューポートに合わせて Canvas のピクセルサイズを追従させる。
      * 引数なし / 戻り値なし（canvas に副作用）
@@ -659,7 +747,7 @@
         if (obj.type === 'group' && obj._objects){
           const label = obj._objects.find(o => o.type === 'text');
           if (label) obj._label = label;
-          if (obj._label) centerGroupLabel(obj);
+          if (obj._label) GroupFactory.center(obj);
         }
       }
     }
@@ -1519,52 +1607,47 @@
     // =========================
     const groupOptions = { hasControls:true, hoverCursor:'move', originX:'left', originY:'top', opacity:1, objectCaching:false };
 
-    function centerGroupLabel(group){
-      if (!group || !group._label) return;
-      const br = group.getBoundingRect(true, true);
-      const centerCanvas = new fabric.Point(br.left + br.width/2, br.top + br.height/2);
-      const m  = group.calcTransformMatrix();
-      const im = fabric.util.invertTransform(m);
-      const centerLocal = fabric.util.transformPoint(centerCanvas, im);
-      group._label.set({ originX:'center', originY:'center', left:centerLocal.x, top:centerLocal.y, textAlign:'center' });
-      group.setCoords();
-    }
-    function createLabeledGroup(baseObjects){
-      const dropPoint = getDropPoint();
-      const labelText = ShapeFactory.textInnterRect();
-      baseObjects.forEach(o => o.set({ objectCaching:false, globalCompositeOperation:'source-over' }));
-      const group = new fabric.Group([...baseObjects, labelText], { ...groupOptions, left: dropPoint.x, top: dropPoint.y, globalCompositeOperation:'source-over' });
-      group._label = labelText;
-      canvas.add(group);
-      centerGroupLabel(group);
-      canvas.setActiveObject(group);
-      if (canvas.bringToFront) canvas.bringToFront(group);
-      const render = canvas.requestRenderAll || canvas.renderAll;
-      render.call(canvas);
-      return group;
-    }
+    // function centerGroupLabel(group){
+    //   if (!group || !group._label) return;
+    //   const br = group.getBoundingRect(true, true);
+    //   const centerCanvas = new fabric.Point(br.left + br.width/2, br.top + br.height/2);
+    //   const m  = group.calcTransformMatrix();
+    //   const im = fabric.util.invertTransform(m);
+    //   const centerLocal = fabric.util.transformPoint(centerCanvas, im);
+    //   group._label.set({ originX:'center', originY:'center', left:centerLocal.x, top:centerLocal.y, textAlign:'center' });
+    //   group.setCoords();
+    // }
+    // function createLabeledGroup(baseObjects){
+    //   const dropPoint = getDropPoint();
+
+    //   const labelText = ShapeFactory.textInnterRect();
+    //   baseObjects.forEach(o => o.set({ objectCaching:false, globalCompositeOperation:'source-over' }));
+    //   const group = new fabric.Group([...baseObjects, labelText], { ...groupOptions, left: dropPoint.x, top: dropPoint.y, globalCompositeOperation:'source-over' });
+    //   group._label = labelText;
+
+    //   canvas.add(group);
+    //   centerGroupLabel(group);
+
+    //   // canvas.setActiveObject(group);
+    //   // if (canvas.bringToFront) canvas.bringToFront(group);
+    //   // const render = canvas.requestRenderAll || canvas.renderAll;
+    //   // render.call(canvas);
+
+    //   return group;
+    // }
     function addCircle(){
-      const circle = ShapeFactory.circle(0, 0);
-      createLabeledGroup([circle]);
+      shapeManager.addShape(ShapeFactory.circle(0, 0));
     }
     function addRect(){
-      const rect = ShapeFactory.rectangle(0, 0);
-      createLabeledGroup([rect]);
+      shapeManager.addShape(ShapeFactory.rectangle(0, 0));
     }
     function addDiamond(){
-      const diamond = ShapeFactory.diamond(0, 0);
-      createLabeledGroup([diamond]);
+      shapeManager.addShape(ShapeFactory.diamond(0, 0));
     }
     function addTextBox(){
       const nextText = window.prompt('テキストを入力してください：', '');
       if (nextText === null) return;
-      const drop = getDropPoint();
-      // const tb = new fabric.Textbox(nextText, { left: drop.x, top: drop.y, fontSize:18, fill:'#0f172a', textAlign:'left', objectCaching:false });
-      const tb = ShapeFactory.text(drop.x, drop.y, nextText);
-      canvas.add(tb);
-      canvas.setActiveObject(tb);
-      const render = canvas.requestRenderAll || canvas.renderAll;
-      render.call(canvas);
+      shapeManager.addText(nextText);
     }
 
     // ===== 直線/矢印 共通描画ステート =====
@@ -2243,7 +2326,7 @@
         }catch(_){}
       }
 
-      if (group){ centerGroupLabel(group); }
+      if (group){ GroupFactory.center(group); }
       (group || labelText).setCoords();
       canvas.renderAll();
     }
