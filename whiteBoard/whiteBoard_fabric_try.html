@@ -481,6 +481,108 @@
     const line_param = { stroke:'#111827', strokeWidth:3, strokeLineCap:'round' };
     const arrow_param = { width:32, height:32, fill:'#111827', stroke:'#111827', strokeWidth:2, originX:'center', originY:'center' };
 
+
+
+  
+    // ========================================
+    // ShapeFactory
+    // Fabricオブジェクト生成専用
+    // ========================================
+    class ShapeFactory {
+      /**
+       * 四角形
+       */
+      static rectangle(x, y, width = 150, height = 100){
+        return new fabric.Rect({ 
+          left:x, 
+          top:y, 
+          width:width, 
+          height:height, 
+          rx:8, 
+          ry:8, 
+          fill:'#60a5fa', 
+          stroke:'#60a5fa', 
+          ...ShapeFactory.defaultStyle(),
+        });
+      }
+
+      /**
+       * 円
+       */
+      static circle(x, y, radius = 60){
+        return new fabric.Circle({ 
+          left:x, 
+          top:y, 
+          radius:radius, 
+          fill:'#22c55e', 
+          stroke:'#22c55e', 
+          ...ShapeFactory.defaultStyle(),
+        });
+      }
+
+      /**
+       * 菱形
+       */
+      static diamond(x, y, size = 140){
+        return new fabric.Rect({
+          left:x, 
+          top:y, 
+          width:size, 
+          height:size,
+          rx:8, 
+          ry:8,
+          fill:'#f59e0b', 
+          stroke:'#f59e0b', 
+          angle:45
+        });
+      }
+
+      /**
+       * テキスト
+       */
+      static text(x, y, text = "Text"){
+        return new fabric.Textbox(
+          text, 
+          { 
+            left: x, 
+            top: y, 
+            fontSize:18, 
+            fill:'#0f172a', 
+            textAlign:'left', 
+            objectCaching:false 
+          }
+        );
+      }
+
+      /**
+       * テキスト(図形内)
+       */
+      static textInnterRect(){
+        return new fabric.Text(
+          '', 
+          { 
+            top:0, 
+            left:0, 
+            fontSize:16, 
+            fill:'#0f172a', 
+            originX:'center', 
+            originY:'center', 
+            textAlign:'center', 
+            objectCaching:false 
+          }
+        );
+      }
+
+      static defaultStyle() {
+        return {
+          strokeWidth:3,
+          strokeUniform:true, 
+        };
+      }
+    }
+
+
+
     /**
      * ビューポートに合わせて Canvas のピクセルサイズを追従させる。
      * 引数なし / 戻り値なし（canvas に副作用）
@@ -1429,7 +1531,7 @@
     }
     function createLabeledGroup(baseObjects){
       const dropPoint = getDropPoint();
-      const labelText = new fabric.Text('', { fontSize:16, fill:'#0f172a', originX:'center', originY:'center', top:0, left:0, textAlign:'center', objectCaching:false });
+      const labelText = ShapeFactory.textInnterRect();
       baseObjects.forEach(o => o.set({ objectCaching:false, globalCompositeOperation:'source-over' }));
       const group = new fabric.Group([...baseObjects, labelText], { ...groupOptions, left: dropPoint.x, top: dropPoint.y, globalCompositeOperation:'source-over' });
       group._label = labelText;
@@ -1442,18 +1544,23 @@
       return group;
     }
     function addCircle(){
-      const circle = new fabric.Circle({ left:0, top:0, radius:60, fill:'#22c55e', stroke:'#22c55e', strokeWidth:3, strokeUniform:true });
+      const circle = ShapeFactory.circle(0, 0);
       createLabeledGroup([circle]);
     }
     function addRect(){
-      const rect = new fabric.Rect({ left:0, top:0, width:150, height:100, rx:8, ry:8, fill:'#60a5fa', stroke:'#60a5fa', strokeWidth:3, strokeUniform:true });
+      const rect = ShapeFactory.rectangle(0, 0);
       createLabeledGroup([rect]);
     }
+    function addDiamond(){
+      const diamond = ShapeFactory.diamond(0, 0);
+      createLabeledGroup([diamond]);
+    }
     function addTextBox(){
-      const drop = getDropPoint();
       const nextText = window.prompt('テキストを入力してください：', '');
       if (nextText === null) return;
-      const tb = new fabric.Textbox(nextText, { left: drop.x, top: drop.y, fontSize:18, fill:'#0f172a', textAlign:'left', objectCaching:false });
+      const drop = getDropPoint();
+      // const tb = new fabric.Textbox(nextText, { left: drop.x, top: drop.y, fontSize:18, fill:'#0f172a', textAlign:'left', objectCaching:false });
+      const tb = ShapeFactory.text(drop.x, drop.y, nextText);
       canvas.add(tb);
       canvas.setActiveObject(tb);
       const render = canvas.requestRenderAll || canvas.renderAll;
@@ -2176,22 +2283,6 @@
       obj.rotate((obj.angle || 0) + deg);
       obj.setCoords();
       canvas.renderAll();
-    }
-
-    /**
-     * 菱形（ダイヤ）を追加する。
-     * - 基本は正方形を45度回転
-     * - 四角と同じく、ダブルクリック/Enterでテキスト編集、Spaceで色変更可能（既存処理が適用）
-     */
-    function addDiamond(){
-      const size = 140;
-      const diamond = new fabric.Rect({
-        left:0, top:0, width:size, height:size,
-        rx:8, ry:8,
-        fill:'#f59e0b', stroke:'#f59e0b', strokeWidth:3,
-        strokeUniform:true, angle:45
-      });
-      createLabeledGroup([diamond]);
     }
 
     /**
