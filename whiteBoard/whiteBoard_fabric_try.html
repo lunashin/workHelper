@@ -593,6 +593,15 @@
       }
 
       /**
+       * 図形追加
+       */
+      add(shape){
+        this.canvas.add(shape);
+        this.afterAdd(shape);
+        return shape;
+      }
+
+      /**
        * ラベル付き図形追加
        */
       addShape(shape){
@@ -661,9 +670,225 @@
         group._label.set({ originX:'center', originY:'center', left:centerLocal.x, top:centerLocal.y, textAlign:'center' });
         group.setCoords();
       }
+    }
 
+
+
+    // ========================================
+    // ArrowFactory
+    // 矢印作成
+    // ========================================
+    class ArrowFactory{
+      static drawing = false;
+      static start = null;  // 線の開始位置 { x:n, y:n }
+      static dashed = false;
+      static previewLine = null;
+      static previewHead = null;
+
+      static create(x1, y1, x2, y2, dashed = false, snap = true){
+        if (snap) {
+          let end_snaped = ArrowFactory.snapArrowEndpointHV({x: x1, y: y1}, {x: x2, y: y2});
+          x2 = end_snaped.x;
+          y2 = end_snaped.y;
+        }
+        const angle = this.calculateAngle(x1, y1, x2, y2);
+        const normalized = this.normalize(x1, y1, x2, y2, angle, dashed);
+        return this.createGroup(normalized, angle, dashed);
+      }
+
+      // 矢印の角度を計算
+      static calculateAngle(x1, y1, x2, y2) {
+        return Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+      }
+
+      static normalize(x1, y1, x2, y2, angle, dashed) {
+        const tmpLine = new fabric.Line([x1, y1, x2, y2], {
+          stroke: line_param.stroke,
+          strokeWidth: line_param.strokeWidth,
+          strokeLineCap: line_param.strokeLineCap,
+          strokeDashArray: (dashed ? [8,6] : null),
+          selectable: false,
+          evented: false
+        });
+        const tmpHead = new fabric.Triangle({
+          left: x2,
+          top: y2,
+          width: arrow_param.width,
+          height: arrow_param.height,
+          angle: angle + 90,
+          fill: arrow_param.fill,
+          stroke: arrow_param.stroke,
+          strokeWidth: arrow_param.strokeWidth,
+          originX: arrow_param.originX,
+          originY: arrow_param.originY,
+          selectable: false,
+          evented: false
+        });
+        const brL = tmpLine.getBoundingRect(true, true);
+        const brH = tmpHead.getBoundingRect(true, true);
+        const minX = Math.min(brL.left, brH.left);
+        const minY = Math.min(brL.top , brH.top );
+        const p1 = { x: x1 - minX, y: y1 - minY };
+        const p2 = { x: x2 - minX, y: y2 - minY };
+
+        return {minX:minX, minY:minY, p1:p1, p2:p2};
+      }
+
+      static createGroup(normalized, angle, dashed) {
+        const shaftLine = new fabric.Line(
+          [normalized.p1.x, normalized.p1.y, normalized.p2.x, normalized.p2.y],
+          {
+            stroke: line_param.stroke,
+            strokeWidth: line_param.strokeWidth,
+            strokeLineCap: line_param.strokeLineCap,
+            // strokeDashArray: (pendingLineDashed ? [8,6] : null)
+            // strokeDashArray: (strokeDraw.dashed ? [8,6] : null)
+            strokeDashArray: (this.dashed ? [8,6] : null)
+          }
+        );
+        const arrowHead = new fabric.Triangle(
+          {
+            left: normalized.p2.x,
+            top: normalized.p2.y,
+            width: arrow_param.width,
+            height: arrow_param.height,
+            angle: angle + 90,
+            fill: arrow_param.fill,
+            stroke: arrow_param.stroke,
+            strokeWidth: arrow_param.strokeWidth,
+            originX: arrow_param.originX,
+            originY: arrow_param.originY
+          }
+        );
+
+        // 3) 線と矢印頭を含めた「全体の左上(minX,minY)」にグループを配置
+        const arrowGroup = new fabric.Group(
+          [shaftLine, arrowHead],
+          {
+            ...groupOptions,
+            left: normalized.minX,
+            top : normalized.minY
+          }
+        );
+
+        return arrowGroup;
+      }
+
+      // プレビュー描画
+      static createPreview(start, dashed){
+        this.disposePreview();
+
+        this.drawing = true;
+        this.start = start;
+        this.dashed = dashed;
+
+        this.previewLine = new fabric.Line(
+          [start.x,start.y,start.x,start.y],
+          {
+            stroke: line_param.stroke,
+            strokeWidth: line_param.strokeWidth,
+            strokeLineCap: line_param.strokeLineCap,
+            opacity: .6,
+            selectable: false,
+            evented: false,
+            strokeDashArray: dashed ? [8,6] : null
+          }
+        );
+        canvas.add(this.previewLine);
+
+        this.previewHead = new fabric.Triangle({
+          left: start.x,
+          top: start.y,
+          width: arrow_param.width,
+          height: arrow_param.height,
+          angle: 0,
+          fill:arrow_param.fill,
+          stroke: arrow_param.stroke,
+          strokeWidth: arrow_param.strokeWidth,
+          originX: arrow_param.originX,
+          originY:arrow_param.originY,
+          selectable: false,
+          evented: false
+        });
+        canvas.add(this.previewHead);
+      }
+
+      // プレビュー更新
+      static updatePreview(end){
+        if (!this.previewLine) return;
+
+        let end_snaped = this.snapArrowEndpointHV(this.start, end);
+
+        this.previewLine.set({
+            x2: end_snaped.x,
+            y2: end_snaped.y
+        });
+
+        if (this.previewHead) {
+            this.previewHead.set({
+                left: end_snaped.x,
+                top: end_snaped.y,
+                angle: this.calculateAngle(this.start.x, this.start.y, end_snaped.x, end_snaped.y) + 90
+            });
+        }
+        this.previewLine.setCoords();
+        this.previewHead?.setCoords();
+      }
+
+      // プレビュー破棄, 描画終了
+      static disposePreview() {
+        if(this.previewLine){
+          canvas.remove(this.previewLine);
+          this.previewLine = null;
+        }
+        if(this.previewHead){
+          canvas.remove(this.previewHead);
+          this.previewHead = null;
+        }
+        this.drawing = false;
+        this.start = null;
+        this.dashed = false;
+      }
+
+      /**
+       * 矢印プレビューの終点スナップ（水平/垂直）
+       * - 判定は「画面ピクセル」でのズレ量を基準にし、ズームに依らず一定の体感にする
+       * - 始点 start と現在座標 pos から、水平or垂直に近い方へスナップした座標を返す
+       * - 両方閾値内の場合は「より近い軸」にスナップ
+       * @param {{x:number,y:number}} start  ワールド座標の始点
+       * @param {{x:number,y:number}} pos    ワールド座標の現在位置
+       * @returns {{x:number,y:number}} スナップ後の終点（ワールド座標）
+       */
+      static snapArrowEndpointHV(start, pos){
+        // 画面ピクセル→ワールドの換算はズーム倍率で近似
+        const z = canvas.getZoom() || 1;
+        const tolWorld = ARROW_SNAP_TOL_PX / z;
+
+        const dx = pos.x - start.x;
+        const dy = pos.y - start.y;
+        const adx = Math.abs(dx);
+        const ady = Math.abs(dy);
+
+        const snapH = (ady <= tolWorld); // 水平（y を揃える）
+        const snapV = (adx <= tolWorld); // 垂直（x を揃える）
+
+        if (!snapH && !snapV) return pos;
+
+        // 両方内なら、より小さい誤差の軸を優先
+        if (snapH && snapV){
+          if (ady <= adx){
+            return { x: pos.x, y: start.y }; // 水平優先
+          }else{
+            return { x: start.x, y: pos.y }; // 垂直優先
+          }
+        }
+        if (snapH) return { x: pos.x, y: start.y };
+        // snapV
+        return { x: start.x, y: pos.y };
+      }
 
     }
+
 
 
     // shapeManager初期化
@@ -1652,109 +1877,127 @@
 
     // ===== 直線/矢印 共通描画ステート =====
     // mode: 'arrow' | 'line'
-    const strokeDraw = {
-      mode: null,
-      start: null,
-      dashed: false,
-      preview: null,   // fabric.Line
-      head: null       // fabric.Triangle (arrow のみ)
-    };
+    // const strokeDraw = {
+    //   mode: null,
+    //   start: null,  // 線の開始位置 { x:n, y:n }
+    //   dashed: false,
+    //   preview: null,   // fabric.Line
+    //   head: null       // fabric.Triangle (arrow のみ)
+    // };
 
     /** 直線/矢印 描画開始（共通） */
     function startStrokeDrawing({ mode, dashed = false } = {}){
-      // 既存プレビューの掃除
-      if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
-      if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
-      strokeDraw.mode = mode;                 // 'arrow' or 'line'
-      strokeDraw.dashed = !!dashed;
+      // // 既存プレビューの掃除
+      // if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
+      // if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
+      // strokeDraw.mode = mode;                 // 'arrow' or 'line'
+      // strokeDraw.dashed = !!dashed;
+      // const start = getDropPoint();
+      // strokeDraw.start = { x: start.x, y: start.y };
+      // // 共通のプレビュー線
+      // strokeDraw.preview = new fabric.Line([start.x, start.y, start.x, start.y], {
+      //   stroke: line_param.stroke,
+      //   strokeWidth: line_param.strokeWidth,
+      //   strokeLineCap: line_param.strokeLineCap,
+      //   opacity: .6, selectable:false, evented:false,
+      //   strokeDashArray: (strokeDraw.dashed ? [8,6] : null)
+      // });
+      // canvas.add(strokeDraw.preview);
+      // // 矢印なら頭も
+      // if (mode === 'arrow'){
+      //   strokeDraw.head = new fabric.Triangle({
+      //     left:start.x, top:start.y, width:arrow_param.width, height:arrow_param.height, angle:0,
+      //     fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
+      //     originX:arrow_param.originX, originY:arrow_param.originY, selectable:false, evented:false
+      //   });
+      //   canvas.add(strokeDraw.head);
+      // }
+      // canvas.bringToFront && canvas.bringToFront(strokeDraw.preview);
+
       const start = getDropPoint();
-      strokeDraw.start = { x: start.x, y: start.y };
-      // 共通のプレビュー線
-      strokeDraw.preview = new fabric.Line([start.x, start.y, start.x, start.y], {
-        stroke: line_param.stroke,
-        strokeWidth: line_param.strokeWidth,
-        strokeLineCap: line_param.strokeLineCap,
-        opacity: .6, selectable:false, evented:false,
-        strokeDashArray: (strokeDraw.dashed ? [8,6] : null)
-      });
-      canvas.add(strokeDraw.preview);
-      // 矢印なら頭も
-      if (mode === 'arrow'){
-        strokeDraw.head = new fabric.Triangle({
-          left:start.x, top:start.y, width:arrow_param.width, height:arrow_param.height, angle:0,
-          fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
-          originX:arrow_param.originX, originY:arrow_param.originY, selectable:false, evented:false
-        });
-        canvas.add(strokeDraw.head);
-      }
-      canvas.bringToFront && canvas.bringToFront(strokeDraw.preview);
+      ArrowFactory.createPreview(
+        { x: start.x, y: start.y },
+        dashed,
+      );
+
       canvas.renderAll();
     }
 
-    /**
-     * 矢印プレビューの終点スナップ（水平/垂直）
-     * - 判定は「画面ピクセル」でのズレ量を基準にし、ズームに依らず一定の体感にする
-     * - 始点 start と現在座標 pos から、水平or垂直に近い方へスナップした座標を返す
-     * - 両方閾値内の場合は「より近い軸」にスナップ
-     * @param {{x:number,y:number}} start  ワールド座標の始点
-     * @param {{x:number,y:number}} pos    ワールド座標の現在位置
-     * @returns {{x:number,y:number}} スナップ後の終点（ワールド座標）
-     */
-    function snapArrowEndpointHV(start, pos){
-      // 画面ピクセル→ワールドの換算はズーム倍率で近似
-      const z = canvas.getZoom() || 1;
-      const tolWorld = ARROW_SNAP_TOL_PX / z;
+    // /**
+    //  * 矢印プレビューの終点スナップ（水平/垂直）
+    //  * - 判定は「画面ピクセル」でのズレ量を基準にし、ズームに依らず一定の体感にする
+    //  * - 始点 start と現在座標 pos から、水平or垂直に近い方へスナップした座標を返す
+    //  * - 両方閾値内の場合は「より近い軸」にスナップ
+    //  * @param {{x:number,y:number}} start  ワールド座標の始点
+    //  * @param {{x:number,y:number}} pos    ワールド座標の現在位置
+    //  * @returns {{x:number,y:number}} スナップ後の終点（ワールド座標）
+    //  */
+    // function snapArrowEndpointHV(start, pos){
+    //   // 画面ピクセル→ワールドの換算はズーム倍率で近似
+    //   const z = canvas.getZoom() || 1;
+    //   const tolWorld = ARROW_SNAP_TOL_PX / z;
 
-      const dx = pos.x - start.x;
-      const dy = pos.y - start.y;
-      const adx = Math.abs(dx);
-      const ady = Math.abs(dy);
+    //   const dx = pos.x - start.x;
+    //   const dy = pos.y - start.y;
+    //   const adx = Math.abs(dx);
+    //   const ady = Math.abs(dy);
 
-      const snapH = (ady <= tolWorld); // 水平（y を揃える）
-      const snapV = (adx <= tolWorld); // 垂直（x を揃える）
+    //   const snapH = (ady <= tolWorld); // 水平（y を揃える）
+    //   const snapV = (adx <= tolWorld); // 垂直（x を揃える）
 
-      if (!snapH && !snapV) return pos;
+    //   if (!snapH && !snapV) return pos;
 
-      // 両方内なら、より小さい誤差の軸を優先
-      if (snapH && snapV){
-        if (ady <= adx){
-          return { x: pos.x, y: start.y }; // 水平優先
-        }else{
-          return { x: start.x, y: pos.y }; // 垂直優先
-        }
-      }
-      if (snapH) return { x: pos.x, y: start.y };
-      // snapV
-      return { x: start.x, y: pos.y };
-    }
+    //   // 両方内なら、より小さい誤差の軸を優先
+    //   if (snapH && snapV){
+    //     if (ady <= adx){
+    //       return { x: pos.x, y: start.y }; // 水平優先
+    //     }else{
+    //       return { x: start.x, y: pos.y }; // 垂直優先
+    //     }
+    //   }
+    //   if (snapH) return { x: pos.x, y: start.y };
+    //   // snapV
+    //   return { x: start.x, y: pos.y };
+    // }
 
-    function calcurateArrowDegree(x1, y1, x2, y2) { return Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI; }
+    // function calcurateArrowDegree(x1, y1, x2, y2) { return Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI; }
 
     /** プレビュー更新（共通） */
     function updateStrokePreview(){
-      if (!strokeDraw.mode || !strokeDraw.preview || !strokeDraw.start) return;
-      const raw = getDropPoint();
-      // 水平/垂直スナップ
-      const end = snapArrowEndpointHV(strokeDraw.start, raw)
-      strokeDraw.preview.set({ x2: end.x, y2: end.y });
-      if (strokeDraw.head){
-        strokeDraw.head.set({ left:end.x, top:end.y });
-        strokeDraw.head.set({ angle: calcurateArrowDegree(strokeDraw.preview.x1, strokeDraw.preview.y1, end.x, end.y) + 90 });
-      }
-      strokeDraw.preview.setCoords();
-      strokeDraw.head && strokeDraw.head.setCoords();
+      // if (!strokeDraw.mode || !strokeDraw.preview || !strokeDraw.start) return;
+      if (!ArrowFactory.drawing) return;
+
+      // const raw = getDropPoint();
+      // // 水平/垂直スナップ
+      // const end = snapArrowEndpointHV(strokeDraw.start, raw)
+      // strokeDraw.preview.set({ x2: end.x, y2: end.y });
+      // if (strokeDraw.head){
+      //   strokeDraw.head.set({ left:end.x, top:end.y });
+      //   strokeDraw.head.set({ angle: ArrowFactory.calculateAngle(strokeDraw.preview.x1, strokeDraw.preview.y1, end.x, end.y) + 90 });
+      // }
+      // strokeDraw.preview.setCoords();
+      // strokeDraw.head && strokeDraw.head.setCoords();
+
+      ArrowFactory.updatePreview(getDropPoint());
       canvas.renderAll();
     }
 
     /** 確定（共通） */
     function finalizeStrokeDrawingIfNeeded(domEvent){
-      if (!strokeDraw.mode || !strokeDraw.start) return false;
-      const hasPreview = !!strokeDraw.preview;
-      const x1 = hasPreview ? strokeDraw.preview.x1 : strokeDraw.start.x;
-      const y1 = hasPreview ? strokeDraw.preview.y1 : strokeDraw.start.y;
+      // if (!strokeDraw.mode || !strokeDraw.start) return false;
+      if (!ArrowFactory.drawing) return;
+
+      // const hasPreview = !!strokeDraw.preview;
+      // const x1 = hasPreview ? strokeDraw.preview.x1 : strokeDraw.start.x;
+      // const y1 = hasPreview ? strokeDraw.preview.y1 : strokeDraw.start.y;
+      // const p  = canvas.getPointer(domEvent);
+      // const x2 = hasPreview ? strokeDraw.preview.x2 : p.x;
+      // const y2 = hasPreview ? strokeDraw.preview.y2 : p.y;
+      // const x1 = strokeDraw.start.x;
+      // const y1 = strokeDraw.start.y;
       const p  = canvas.getPointer(domEvent);
-      const x2 = hasPreview ? strokeDraw.preview.x2 : p.x;
-      const y2 = hasPreview ? strokeDraw.preview.y2 : p.y;
+      const x2 = p.x;
+      const y2 = p.y;
 
       if (strokeDraw.mode === 'line'){
         const plain = new fabric.Line([x1, y1, x2, y2], {
@@ -1775,79 +2018,85 @@
 
       // --- 矢印 ---
       // 1) プレビューと同じ絶対座標で一旦「素オブジェクト」を作成し、線＋矢印頭の外接矩形を取得
-      const angleDeg = calcurateArrowDegree(x1, y1, x2, y2);
-      const tmpLine = new fabric.Line([x1, y1, x2, y2], {
-        stroke: line_param.stroke,
-        strokeWidth: line_param.strokeWidth,
-        strokeLineCap: line_param.strokeLineCap,
-        strokeDashArray: (strokeDraw.dashed ? [8,6] : null),
-        selectable:false, evented:false
-      });
-      const tmpHead = new fabric.Triangle({
-        left:x2, top:y2,
-        width:arrow_param.width, height:arrow_param.height,
-        angle:angleDeg + 90,
-        fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
-        originX:arrow_param.originX, originY:arrow_param.originY,
-        selectable:false, evented:false
-      });
-      const brL = tmpLine.getBoundingRect(true, true);
-      const brH = tmpHead.getBoundingRect(true, true);
-      const minX = Math.min(brL.left, brH.left);
-      const minY = Math.min(brL.top , brH.top );
-      const p1 = { x: x1 - minX, y: y1 - minY };
-      const p2 = { x: x2 - minX, y: y2 - minY };
+      // const angleDeg = ArrowFactory.calculateAngle(x1, y1, x2, y2);
+      // const tmpLine = new fabric.Line([x1, y1, x2, y2], {
+      //   stroke: line_param.stroke,
+      //   strokeWidth: line_param.strokeWidth,
+      //   strokeLineCap: line_param.strokeLineCap,
+      //   strokeDashArray: (strokeDraw.dashed ? [8,6] : null),
+      //   selectable:false, evented:false
+      // });
+      // const tmpHead = new fabric.Triangle({
+      //   left:x2, top:y2,
+      //   width:arrow_param.width, height:arrow_param.height,
+      //   angle:angleDeg + 90,
+      //   fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
+      //   originX:arrow_param.originX, originY:arrow_param.originY,
+      //   selectable:false, evented:false
+      // });
+      // const brL = tmpLine.getBoundingRect(true, true);
+      // const brH = tmpHead.getBoundingRect(true, true);
+      // const minX = Math.min(brL.left, brH.left);
+      // const minY = Math.min(brL.top , brH.top );
+      // const p1 = { x: x1 - minX, y: y1 - minY };
+      // const p2 = { x: x2 - minX, y: y2 - minY };
 
       // 2) 正規化した相対座標で最終オブジェクトを作り直す
-      const shaftLine = new fabric.Line(
-        [p1.x, p1.y, p2.x, p2.y],
-        {
-          stroke: line_param.stroke,
-          strokeWidth: line_param.strokeWidth,
-          strokeLineCap: line_param.strokeLineCap,
-          // strokeDashArray: (pendingLineDashed ? [8,6] : null)
-          strokeDashArray: (strokeDraw.dashed ? [8,6] : null)
-        }
-      );
-      const arrowHead = new fabric.Triangle(
-        {
-          left:p2.x, top:p2.y,
-          width:arrow_param.width, height:arrow_param.height,
-          angle:angleDeg + 90,
-          fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
-          originX:arrow_param.originX, originY:arrow_param.originY
-        }
-      );
+      // const shaftLine = new fabric.Line(
+      //   [p1.x, p1.y, p2.x, p2.y],
+      //   {
+      //     stroke: line_param.stroke,
+      //     strokeWidth: line_param.strokeWidth,
+      //     strokeLineCap: line_param.strokeLineCap,
+      //     // strokeDashArray: (pendingLineDashed ? [8,6] : null)
+      //     strokeDashArray: (strokeDraw.dashed ? [8,6] : null)
+      //   }
+      // );
+      // const arrowHead = new fabric.Triangle(
+      //   {
+      //     left:p2.x, top:p2.y,
+      //     width:arrow_param.width, height:arrow_param.height,
+      //     angle:angleDeg + 90,
+      //     fill:arrow_param.fill, stroke:arrow_param.stroke, strokeWidth:arrow_param.strokeWidth,
+      //     originX:arrow_param.originX, originY:arrow_param.originY
+      //   }
+      // );
 
-      // 3) 線と矢印頭を含めた「全体の左上(minX,minY)」にグループを配置
-      const arrowGroup = new fabric.Group([shaftLine, arrowHead], {
-        ...groupOptions,
-        left: minX,
-        top : minY
-      });
+      // // 3) 線と矢印頭を含めた「全体の左上(minX,minY)」にグループを配置
+      // const arrowGroup = new fabric.Group([shaftLine, arrowHead], {
+      //   ...groupOptions,
+      //   left: minX,
+      //   top : minY
+      // });
 
-      canvas.add(arrowGroup);
-      canvas.setActiveObject(arrowGroup);
+      const arrowGroup = ArrowFactory.create(ArrowFactory.start.x, ArrowFactory.start.y, x2, y2, ArrowFactory.dashed, true);
+      shapeManager.add(arrowGroup);
+      // canvas.add(arrowGroup);
+      // canvas.setActiveObject(arrowGroup);
 
       // プレビュー片付け
-      if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
-      if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
-      strokeDraw.mode = null; strokeDraw.start = null; strokeDraw.dashed = false;
+      // if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
+      // if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
+      // strokeDraw.mode = null; strokeDraw.start = null; strokeDraw.dashed = false;
+      ArrowFactory.disposePreview();
+      // strokeDraw.mode = null;
+      // strokeDraw.start = null;
 
-      canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
-      scheduleAutosave();
-      pushHistory();
+      // canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+      // scheduleAutosave();
+      // pushHistory();
       return true;
     }
 
     /** プレビューキャンセル（共通） */
     function cancelStrokePreview(render){
-      if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
-      if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
-      strokeDraw.mode = null;
-      strokeDraw.start = null;
-      strokeDraw.dashed = false;
-      if (render) canvas.renderAll();
+      // if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
+      // if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
+      // strokeDraw.mode = null;
+      // strokeDraw.start = null;
+      // strokeDraw.dashed = false;
+      // if (render) canvas.renderAll();
+      ArrowFactory.disposePreview();
     }
 
     /**
@@ -2564,7 +2813,8 @@
 
       // （Esc のズーム/リセットは、ペンモード時は上の分岐で消化）
       // Esc: 矢印描画キャンセル
-      if (strokeDraw.mode && (keyLower==='escape' || code==='Escape')){ ev.preventDefault(); cancelStrokePreview(true); return; }
+      // if (strokeDraw.mode && (keyLower==='escape' || code==='Escape')){ ev.preventDefault(); cancelStrokePreview(true); return; }
+      if (ArrowFactory.drawing && (keyLower==='escape' || code==='Escape')){ ev.preventDefault(); ArrowFactory.disposePreview(); return; }
 
       // Esc: 拡大縮小・ポイントリセット
       if (keyLower === 'escape'){ ev.preventDefault(); zoomResetCanvas(); saveViewportMeta(currentSlot, { touchUpdatedAt: false }); return; }
