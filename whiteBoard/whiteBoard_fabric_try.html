@@ -1999,22 +1999,22 @@
       const x2 = p.x;
       const y2 = p.y;
 
-      if (strokeDraw.mode === 'line'){
-        const plain = new fabric.Line([x1, y1, x2, y2], {
-          stroke: line_param.stroke,
-          strokeWidth: line_param.strokeWidth,
-          strokeLineCap: line_param.strokeLineCap,
-          strokeDashArray: (strokeDraw.dashed ? [8,6] : null)
-        });
-        canvas.add(plain);
-        canvas.setActiveObject(plain);
-        // プレビュー片付け
-        if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
-        if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
-        strokeDraw.mode = null; strokeDraw.start = null; strokeDraw.dashed = false;
-        canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
-        scheduleAutosave(); pushHistory(); return true;
-      }
+      // if (strokeDraw.mode === 'line'){
+      //   const plain = new fabric.Line([x1, y1, x2, y2], {
+      //     stroke: line_param.stroke,
+      //     strokeWidth: line_param.strokeWidth,
+      //     strokeLineCap: line_param.strokeLineCap,
+      //     strokeDashArray: (strokeDraw.dashed ? [8,6] : null)
+      //   });
+      //   canvas.add(plain);
+      //   canvas.setActiveObject(plain);
+      //   // プレビュー片付け
+      //   if (strokeDraw.preview){ canvas.remove(strokeDraw.preview); strokeDraw.preview = null; }
+      //   if (strokeDraw.head){ canvas.remove(strokeDraw.head); strokeDraw.head = null; }
+      //   strokeDraw.mode = null; strokeDraw.start = null; strokeDraw.dashed = false;
+      //   canvas.requestRenderAll ? canvas.requestRenderAll() : canvas.renderAll();
+      //   scheduleAutosave(); pushHistory(); return true;
+      // }
 
       // --- 矢印 ---
       // 1) プレビューと同じ絶対座標で一旦「素オブジェクト」を作成し、線＋矢印頭の外接矩形を取得
