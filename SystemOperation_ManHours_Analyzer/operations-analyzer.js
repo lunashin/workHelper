@@ -1157,18 +1157,29 @@ class GraphRenderer
             scales: {
                 x: {
                     type: 'category',
+                    position: 'bottom',
                     stacked: model.stacked,
                     offset: true,
                     grid: {
                         display: false
                     },
                     ticks: {
-                        // ラベルだけを間引き、棒と集計データはすべて保持する。
+                        // 右上がり45度に固定する。
+                        // 下側の横軸では、Chart.jsが文字列の末尾を目盛り側に配置する。
+                        minRotation: 45,
+                        maxRotation: 45,
+
+                        // ラベルは対応する目盛りの位置で、軸の外側に表示する。
+                        align: 'center',
+                        crossAlign: 'near',
+                        mirror: false,
+                        labelOffset: 0,
+
+                        // 表示数の固定上限を設けず、収まる範囲で多く表示する。
+                        // 間引くのはラベルだけで、棒や集計データは省略しない。
                         autoSkip: true,
-                        maxTicksLimit: 24,      // 表示するラベル数の上限
-                        autoSkipPadding: 12,    // ラベル間に確保する余白（px）
-                        maxRotation: 0,
-                        minRotation: 0,
+                        autoSkipPadding: 4,
+
                         color: '#526780',
                         font: {
                             size: 13
