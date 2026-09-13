@@ -1165,8 +1165,8 @@ class GraphRenderer
                     ticks: {
                         // ラベルだけを間引き、棒と集計データはすべて保持する。
                         autoSkip: true,
-                        maxTicksLimit: 12,
-                        autoSkipPadding: 12,
+                        maxTicksLimit: 24,      // 表示するラベル数の上限
+                        autoSkipPadding: 12,    // ラベル間に確保する余白（px）
                         maxRotation: 0,
                         minRotation: 0,
                         color: '#526780',
