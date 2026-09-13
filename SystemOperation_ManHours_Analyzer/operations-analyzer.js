@@ -32,9 +32,7 @@ const CONFIG = Object.freeze({
     maxSpanDays: 36600,
     millisecondsPerDay: 86400000,
     effortScale: 10,
-    // Graph2dの日時軸をカテゴリ軸として使うための内部基準日。実データの日付ではない。
-    chartBaseDate: Date.UTC(2000, 0, 1),
-    graphScriptUrl: 'https://cdn.jsdelivr.net/npm/vis-timeline@latest/standalone/umd/vis-timeline-graph2d.min.js',
+    graphScriptUrl: 'https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js',
     demoReferenceDate: '2026-09-12',
     demoBudget: '600'
 });
@@ -984,7 +982,7 @@ class AnalysisService
      * @param {string} tab hours、types、counts、varianceのいずれか。
      * @param {string[]} types 種類タブの系列順。
      * @param {string} typeMode hoursまたはpercent。
-     * @returns {ChartModel} DOMやvis.jsに依存しない描画用データ。
+     * @returns {ChartModel} DOMやChart.jsに依存しない描画用データ。
      */
     static chartModel(buckets, tab, types, typeMode)
     {
@@ -1050,10 +1048,10 @@ class AnalysisService
 }
 
 // =============================================================================
-// グラフ描画：vis.js固有の設定とインスタンスの寿命をここだけで管理する
+// グラフ描画：Chart.js固有の設定とインスタンスの寿命をここだけで管理する
 // =============================================================================
 
-/** Graph2dインスタンスを生成し、再描画前に確実に破棄する。 */
+/** Chart.jsインスタンスを生成し、再描画前に確実に破棄する。 */
 class GraphRenderer
 {
     /**
@@ -1062,13 +1060,13 @@ class GraphRenderer
      */
     constructor()
     {
-        /** @type {Object[]} 現在表示中のvis.Graph2dインスタンス。 */
+        /** @type {Object[]} 現在表示中のChart.jsインスタンス。 */
         this.graphs = [];
     }
 
     /**
      * 表示中のグラフをすべて破棄する。
-     * @returns {void} 引数なし。イベント購読やDOM参照を解放する。
+     * @returns {void} 引数なし。イベント購読とCanvas参照を解放する。
      */
     clear()
     {
@@ -1080,7 +1078,7 @@ class GraphRenderer
     }
 
     /**
-     * 指定要素に1つの棒グラフを描画する。
+     * 指定要素にCanvasを作成し、棒グラフを描画する。
      * @param {HTMLElement} container .graph要素。
      * @param {Bucket[]} buckets 横軸の期間一覧。
      * @param {ChartModel} model 系列・数値・単位・積み上げ設定。
@@ -1088,112 +1086,175 @@ class GraphRenderer
      */
     draw(container, buckets, model)
     {
-        if (!window.vis?.Graph2d)
+        if (typeof window.Chart !== 'function')
         {
             container.innerHTML = '<div class="empty">グラフを読み込めません。CDNへの接続を確認して再読込してください。下の集計表は利用できます。</div>';
             return;
         }
 
-        // Graph2dの日時軸へ等間隔の仮日付を割り当て、ラベルだけ実際の期間に置換する。
+        // 期間が多い場合は横スクロールさせ、すべての期間名を表示する。
+        // Chart.jsは親要素を基準にリサイズするため、Canvas専用の親を使用する。
         const cellWidth = buckets.length <= 4 ? 180 : 100;
-        const width = Math.max(container.parentElement.clientWidth - 2, buckets.length * cellWidth + 110);
-        container.style.width = width + 'px';
-        const items = [];
-        const groups = [];
-        for (let bucketIndex = 0; bucketIndex < buckets.length; bucketIndex++)
+        container.style.width = '100%';
+        container.style.minWidth = (buckets.length * cellWidth + 110) + 'px';
+
+        const canvas = document.createElement('canvas');
+        canvas.setAttribute('role', 'img');
+        canvas.setAttribute(
+            'aria-label',
+            `期間別の棒グラフ（${model.unit}）。数値は下の集計表で確認できます。`
+        );
+        container.replaceChildren(canvas);
+
+        // カテゴリ軸に実際の期間名を渡す。仮日付と日付ライブラリは不要。
+        const labels = [];
+        for (const bucket of buckets)
         {
-            for (let seriesIndex = 0; seriesIndex < model.series.length; seriesIndex++)
-            {
-                items.push({
-                    x: new Date(CONFIG.chartBaseDate + bucketIndex * CONFIG.millisecondsPerDay),
-                    y: model.values[bucketIndex][seriesIndex],
-                    group: seriesIndex
-                });
-            }
+            labels.push(bucket.label);
         }
-        for (let index = 0; index < model.series.length; index++)
+
+        const datasets = [];
+        for (let seriesIndex = 0; seriesIndex < model.series.length; seriesIndex++)
         {
-            const series = model.series[index];
-            groups.push({
-                id: index,
-                content: escapeHtml(series.label),
-                style: `fill:${series.color};stroke:${series.color};fill-opacity:0.85;`,
-                options: { style: 'bar', drawPoints: false }
+            const series = model.series[seriesIndex];
+            const values = [];
+
+            for (let bucketIndex = 0; bucketIndex < buckets.length; bucketIndex++)
+            {
+                values.push(model.values[bucketIndex][seriesIndex]);
+            }
+
+            datasets.push({
+                label: series.label,
+                data: values,
+                backgroundColor: series.color,
+                borderColor: series.color,
+                borderWidth: 1,
+                barThickness: Math.min(64, cellWidth * 0.65) /
+                    (model.stacked ? 1 : model.series.length),
+                maxBarThickness: 64,
+                categoryPercentage: 0.8,
+                barPercentage: 0.8
             });
         }
 
-        // 幅・軸・色・ズーム可否を旧版から維持する。
+        // 作業種類は積み上げ、予実比較は横並びの棒グラフとする。
+        // 構成比は0～100%、件数は整数の目盛り、工数は0始まりにする。
         const options = {
-            height: '290px', style: 'bar', drawPoints: false, stack: model.stacked,
-            barChart: { width: Math.min(64, cellWidth * 0.65), sideBySide: !model.stacked, align: 'center' },
-            legend: false,
-            start: new Date(CONFIG.chartBaseDate - CONFIG.millisecondsPerDay * 0.6),
-            end: new Date(CONFIG.chartBaseDate + (buckets.length - 0.4) * CONFIG.millisecondsPerDay),
-            moveable: false, zoomable: false, showCurrentTime: false, showMajorLabels: false,
-            timeAxis: { scale: 'day', step: 1 },
-            format: { minorLabels: axisLabel, majorLabels: emptyLabel },
-            dataAxis: {
-                left: {
-                    range: model.unit === '%' ? { min: 0, max: 100 } : { min: 0 },
-                    title: { text: model.unit },
-                    format: valueLabel
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            locale: 'ja-JP',
+            plugins: {
+                legend: {
+                    display: false
                 },
-                width: 75
+                tooltip: {
+                    callbacks: {
+                        label: tooltipLabel
+                    }
+                }
             },
-            moment: utcMoment
+            scales: {
+                x: {
+                    type: 'category',
+                    stacked: model.stacked,
+                    offset: true,
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        autoSkip: false,
+                        maxRotation: 0,
+                        minRotation: 0,
+                        color: '#526780',
+                        font: {
+                            size: 13
+                        }
+                    }
+                },
+                y: {
+                    type: 'linear',
+                    stacked: model.stacked,
+                    beginAtZero: true,
+                    min: 0,
+                    title: {
+                        display: true,
+                        text: model.unit,
+                        color: '#526780'
+                    },
+                    grid: {
+                        color: '#eef2f7'
+                    },
+                    ticks: {
+                        color: '#526780',
+                        callback: valueLabel
+                    }
+                }
+            }
         };
+
+        if (model.unit === '%')
+        {
+            options.scales.y.max = 100;
+        }
+
+        if (model.unit === '件')
+        {
+            options.scales.y.ticks.precision = 0;
+        }
+
+        // 途中まで生成された場合も含め、失敗したグラフの参照を残さない。
         try
         {
-            this.graphs.push(new window.vis.Graph2d(container, items, groups, options));
+            this.graphs.push(new window.Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets
+                },
+                options
+            }));
         }
         catch (error)
         {
+            const failedChart = window.Chart.getChart(canvas);
+            if (failedChart)
+            {
+                failedChart.destroy();
+            }
+
             container.innerHTML = '<div class="empty">グラフ描画に失敗しました。集計表をご確認ください。</div>';
             console.error(error);
         }
 
         /**
-         * 仮日付を対応する期間ラベルに変換する。
-         * @param {Object} date valueOf()でミリ秒を返すvis.jsの日付オブジェクト。
-         * @returns {string} HTMLエスケープ済みラベル。範囲外は空文字。
-         */
-        function axisLabel(date)
-        {
-            const index = Math.round((date.valueOf() - CONFIG.chartBaseDate) / CONFIG.millisecondsPerDay);
-            return buckets[index] ? escapeHtml(buckets[index].label) : '';
-        }
-
-        /**
-         * 非表示の主目盛り用の文字列を返す。
-         * @returns {string} 引数なし。常に空文字。
-         */
-        function emptyLabel()
-        {
-            return '';
-        }
-
-        /**
          * 縦軸ラベルを整形する。件数は整数の目盛りだけを表示する。
-         * @param {number} value 目盛りの数値。
+         * @param {number|string} value 目盛りの数値。
          * @returns {string} 表示用文字列。件数の小数目盛りは空文字。
          */
         function valueLabel(value)
         {
             if (model.unit === '件')
             {
-                return Number.isInteger(value) ? String(value) : '';
+                return Number.isInteger(Number(value)) ? String(value) : '';
             }
+
             return formatNumber(value);
         }
 
         /**
-         * Graph2dが使う日付をUTCへ統一する。
-         * @param {*} date vis.momentに渡せる日付。
-         * @returns {Object} UTCモードのMomentオブジェクト。
+         * マウスを重ねた棒の系列名・値・単位を表示する。
+         * @param {Object} context Chart.jsのTooltipItem。
+         * @returns {string} 系列名と単位付きの値。
          */
-        function utcMoment(date)
+        function tooltipLabel(context)
         {
-            return window.vis.moment(date).utc();
+            const value = model.unit === '件' ?
+                String(context.parsed.y) :
+                formatNumber(context.parsed.y);
+
+            return `${context.dataset.label}: ${value} ${model.unit}`;
         }
     }
 }
@@ -1350,7 +1411,7 @@ class DashboardView
      * @param {string} period 期間キー。
      * @param {Bucket[]} buckets 期間別集計。
      * @param {ChartModel} model グラフと集計表のモデル。
-     * @returns {HTMLElement} vis.jsが描画する.graph要素。
+     * @returns {HTMLElement} Chart.js用Canvasを配置する.graph要素。
      */
     static appendChartPanel(period, buckets, model)
     {
@@ -1875,7 +1936,7 @@ class OperationsApp
     }
 
     /**
-     * CDNからGraph2dを読み込み、成功・失敗時に表示を更新する。
+     * CDNからChart.jsを読み込み、成功・失敗時に表示を更新する。
      * @returns {void} 引数なし。CSVデータを送信する処理は含まない。
      */
     loadGraphLibrary()
@@ -1889,14 +1950,15 @@ class OperationsApp
 
     /**
      * CDNスクリプトの読込完了を処理する。
-     * @returns {void} 引数なし。Graph2dの公開有無を確認して再描画する。
+     * @returns {void} 引数なし。Chart.jsの公開有無を確認して再描画する。
      */
     onGraphLibraryLoaded()
     {
         getElement('cdn').textContent = '';
-        if (!window.vis?.Graph2d)
+        if (typeof window.Chart !== 'function')
         {
-            getElement('cdn').textContent = 'Graph2dを利用できません。CDNの公開内容をご確認ください。';
+            getElement('cdn').textContent =
+                'Chart.jsを利用できません。CDNの公開内容をご確認ください。';
         }
         this.render();
     }

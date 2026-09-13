@@ -4,10 +4,6 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width,initial-scale=1" />
         <title>運用業務分析ツール</title>
-        <link
-            rel="stylesheet"
-            href="https://cdn.jsdelivr.net/npm/vis-timeline@latest/styles/vis-timeline-graph2d.min.css"
-        />
         <style>
             /* 共通の配色：各画面要素からCSS変数で参照する */
             :root {
@@ -267,7 +263,10 @@
                 overflow: auto;
                 margin-top: 12px;
             }
-            .graph {
+            /* Chart.jsのCanvas専用親：高さを固定し、横幅はJSで期間数に合わせる */
+            .graph
+            {
+                position: relative;
                 height: 290px;
             }
             .legend {
@@ -346,20 +345,6 @@
                 border-radius: 5px;
                 padding: 3px 8px;
                 font-size: 13px;
-            }
-            /* vis.jsの標準スタイルに対する見た目の調整 */
-            .vis-timeline {
-                border-color: #e2e9f0 !important;
-            }
-            .vis-text {
-                color: #526780 !important;
-                font-size: 13px;
-            }
-            .vis-grid.vis-minor {
-                border-color: #eef2f7 !important;
-            }
-            .vis-label {
-                fill: #526780 !important;
             }
             progress {
                 width: 100%;
@@ -591,11 +576,12 @@
                 </div>
             </section>
             <!-- ライブラリの説明とサンプルCSVの保存 -->
-            <footer>
-                グラフ：vis.js Graph2d（vis-timeline / jsDelivr
-                @latest）。初回表示にはCDNへの接続が必要です。CSVの外部送信・自動保存は行いません。
-                <button id="sampleDownload">サンプルCSVを保存</button>
-            </footer>
+        <footer>
+            グラフ：Chart.js 4.5.1（jsDelivr）。
+            初回表示にはCDNへの接続が必要です。
+            CSVの外部送信・自動保存は行いません。
+            <button id="sampleDownload">サンプルCSVを保存</button>
+        </footer>
         </main>
         <!-- アプリ処理：同じフォルダーのJSをDOM構築後に実行する -->
         <script src="./operations-analyzer.js" defer></script>
