@@ -33,7 +33,6 @@ const CONFIG = Object.freeze({
     millisecondsPerDay: 86400000,
     effortScale: 10,
     graphScriptUrl: 'https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js',
-    demoReferenceDate: '2026-09-12',
     demoBudget: '600'
 });
 
@@ -61,6 +60,12 @@ const FILTER_CONTROL_IDS = Object.freeze([
     'from', 'to', 'status', 'withdraw', 'planStart', 'planEnd',
     'asof', 'budget', 'typeMode', 'completed'
 ]);
+
+/** 保存先キーと保存対象。基準日は保存対象に含めない。 */
+const PLANNING_STORAGE = Object.freeze({
+    prefix: 'operations-analyzer.planning.v1.',
+    fields: Object.freeze(['planStart', 'planEnd', 'budget'])
+});
 
 /** アプリの唯一の共有インスタンス。可変データはこのインスタンス内で管理する。 */
 let application = null;
@@ -888,39 +893,53 @@ class AnalysisService
     }
 
     /**
-     * 作業種類を実績工数の降順に並べる。同工数は名前の自然順とする。
+     * 凡例を定常業務No、気付き番号、未分類の順に並べる。
      * @param {Task[]} rows 集計対象の作業。
-     * @returns {string[]} 重複のない作業種類名。
+     * @returns {string[]} 各分類内を番号の自然順で並べた種類名。
      */
     static sortedTypes(rows)
     {
-        const amounts = new Map();
+        const types = new Map();
+
+        // 作業種類ごとに、並べ替えに使用する番号と分類順位を保持する。
         for (const task of rows)
         {
-            amounts.set(task.type, (amounts.get(task.type) || 0) + task.actual);
+            if (!types.has(task.type))
+            {
+                // 両方の番号を持つ作業は定常業務側に配置する。
+                const rank = task.routine ? 0 : task.issue ? 1 : 2;
+
+                types.set(task.type, {
+                    label: task.type,
+                    rank,
+                    routine: task.routine,
+                    issue: task.issue
+                });
+            }
         }
-        return Array.from(amounts.keys()).sort(compareTypeNames).sort(compareAmounts);
+
+        const sorted = Array.from(types.values()).sort(compareTypes);
+        const labels = [];
+
+        for (const type of sorted)
+        {
+            labels.push(type.label);
+        }
+
+        return labels;
 
         /**
-         * 種類名を日本語の自然順で比較する。
-         * @param {string} first 種類名1。
-         * @param {string} second 種類名2。
+         * 分類を優先し、番号内の数字を数値として比較する。
+         * @param {Object} first 分類順位・番号・名称を持つ比較対象1。
+         * @param {Object} second 分類順位・番号・名称を持つ比較対象2。
          * @returns {number} sort用の比較結果。
          */
-        function compareTypeNames(first, second)
+        function compareTypes(first, second)
         {
-            return first.localeCompare(second, 'ja', { numeric: true });
-        }
-
-        /**
-         * 種類の実績工数を降順で比較する。
-         * @param {string} first 種類名1。
-         * @param {string} second 種類名2。
-         * @returns {number} sort用の比較結果。等値は先の名前順を維持する。
-         */
-        function compareAmounts(first, second)
-        {
-            return amounts.get(second) - amounts.get(first);
+            return first.rank - second.rank ||
+                first.routine.localeCompare(second.routine, 'ja', { numeric: true }) ||
+                first.issue.localeCompare(second.issue, 'ja', { numeric: true }) ||
+                first.label.localeCompare(second.label, 'ja', { numeric: true });
         }
     }
 
@@ -1506,6 +1525,97 @@ function createSampleCsv()
 }
 
 // =============================================================================
+// 計画条件の保存：ユーザーが変更した3項目だけをlocalStorageへ保存する
+// =============================================================================
+
+/** 計画条件の保存・復元。CSVデータや消化状況の基準日は保存しない。 */
+class PlanningSettings
+{
+    /**
+     * 保存済みの計画条件を入力欄に復元する。
+     * @returns {Set<string>} 引数なし。復元した項目ID。保存された空欄も含む。
+     */
+    static restore()
+    {
+        const restored = new Set();
+
+        try
+        {
+            for (const id of PLANNING_STORAGE.fields)
+            {
+                const value = window.localStorage.getItem(
+                    PLANNING_STORAGE.prefix + id
+                );
+
+                if (value === null)
+                {
+                    continue;
+                }
+
+                // 不正な保存値を復元しない。
+                // 空文字は、ユーザーによる意図的なクリアとして復元する。
+                if (value !== '')
+                {
+                    if (id === 'budget')
+                    {
+                        if (!Number.isFinite(Number(value)) || Number(value) < 0)
+                        {
+                            continue;
+                        }
+                    }
+                    else
+                    {
+                        const timestamp = Date.parse(value + 'T00:00:00Z');
+
+                        if (!/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+                            !Number.isFinite(timestamp) ||
+                            toIsoDate(timestamp) !== value)
+                        {
+                            continue;
+                        }
+                    }
+                }
+
+                getElement(id).value = value;
+                restored.add(id);
+            }
+        }
+        catch (error)
+        {
+            console.warn('計画条件を復元できませんでした。', error);
+        }
+
+        return restored;
+    }
+
+    /**
+     * 変更された計画条件1項目を保存する。
+     * @param {string} id PLANNING_STORAGE.fieldsに定義した入力欄ID。
+     * @returns {void} 保存できない環境でも画面操作は継続する。
+     */
+    static save(id)
+    {
+        if (!PLANNING_STORAGE.fields.includes(id))
+        {
+            return;
+        }
+
+        try
+        {
+            // 空文字も保存し、次回のCSV取込で自動補完されることを防ぐ。
+            window.localStorage.setItem(
+                PLANNING_STORAGE.prefix + id,
+                getElement(id).value
+            );
+        }
+        catch (error)
+        {
+            console.warn('計画条件を保存できませんでした。', error);
+        }
+    }
+}
+
+// =============================================================================
 // アプリ制御：共有状態、イベント、取込から再描画までの処理順序
 // =============================================================================
 
@@ -1532,17 +1642,25 @@ class OperationsApp
         this.tabs = [];
         /** @type {GraphRenderer} グラフの生成・破棄を担当するオブジェクト。 */
         this.graphRenderer = new GraphRenderer();
+        /** @type {Set<string>} 復元済み・手動変更済みの計画項目。自動補完から保護する。 */
+        this.planningFields = new Set();
     }
 
     /**
-     * 画面イベント、初期日付、CDN読込を設定してアプリを起動する。
-     * @returns {void} 引数なし。HTMLのdefer属性によるDOM構築後に1回だけ呼ぶ。
+     * 保存済み条件を復元し、基準日を今日に設定してアプリを起動する。
+     * @returns {void} 引数なし。DOM構築後に1回だけ呼ぶ。
      */
     initialize()
     {
         this.tabs = Array.from(document.querySelectorAll('[data-tab]'));
         this.bindEvents();
+
+        // 初回描画の前に、保存された3項目を復元する。
+        this.planningFields = PlanningSettings.restore();
+
+        // 基準日は保存値を使用せず、起動時の今日を設定する。
         getElement('asof').value = todayInputValue();
+
         this.render();
         this.loadGraphLibrary();
     }
@@ -1654,16 +1772,25 @@ class OperationsApp
     }
 
     /**
-     * 集計条件の変更を画面に反映する。
+     * 集計条件の変更を保存・画面表示に反映する。
      * @param {string} id 変更された入力欄のID。
-     * @returns {void} 取り下げを明示選択した場合は除外チェックも同期する。
+     * @returns {void} 保存対象の計画項目だけをlocalStorageへ記憶する。
      */
     onConditionChange(id)
     {
+        // 保存失敗時も、現在の画面で手動入力した条件は自動補完から保護する。
+        if (PLANNING_STORAGE.fields.includes(id))
+        {
+            this.planningFields.add(id);
+            PlanningSettings.save(id);
+        }
+
+        // 取り下げを明示選択した場合は、除外チェックも同期する。
         if (id === 'status' && getElement('status').value === '取り下げ')
         {
             getElement('withdraw').checked = true;
         }
+
         this.render();
     }
 
@@ -1837,7 +1964,7 @@ class OperationsApp
      * CSVを検証し、成功したときだけ現在のデータを置き換える。
      * @param {string} text CSV全文。
      * @param {string} label ファイル名またはサンプル表示名。
-     * @returns {void} 条件・計画期間を従来の初期値に戻して再描画する。
+     * @returns {void} 集計条件をリセットし、未設定の計画条件だけを補完する。
      * @throws {Error} 入力検証エラー。呼出元でメッセージを表示する。
      */
     load(text, label)
@@ -1847,22 +1974,35 @@ class OperationsApp
         // normalizeが成功するまでは前回のデータを変更しない。
         this.data = parsed.rows;
         this.fileLabel = label;
-        getElement('budget').value = '';
-        getElement('asof').value = todayInputValue();
+
+        // 保存・手動入力のない項目だけ、CSVから初期値を補完する。
+        if (!this.planningFields.has('planStart'))
+        {
+            getElement('planStart').value = Number.isFinite(parsed.min) ?
+                toIsoDate(parsed.min) : '';
+        }
+
+        if (!this.planningFields.has('planEnd'))
+        {
+            getElement('planEnd').value = Number.isFinite(parsed.max) ?
+                toIsoDate(parsed.max) : '';
+        }
+
+        if (!this.planningFields.has('budget'))
+        {
+            getElement('budget').value = '';
+        }
+
+        // 基準日は変更しない。起動時の今日、またはユーザーの指定日を維持する。
         this.clearFilterInputs();
-        if (Number.isFinite(parsed.min))
-        {
-            getElement('planStart').value = toIsoDate(parsed.min);
-            getElement('planEnd').value = toIsoDate(parsed.max);
-        }
-        else
-        {
-            getElement('planStart').value = '';
-            getElement('planEnd').value = '';
-        }
-        getElement('message').className = 'notice ' + (parsed.warnings.length ? 'warn' : '');
-        getElement('message').textContent = `${label}：${this.data.length.toLocaleString()}件を読み込みました。` +
+
+        getElement('message').className =
+            'notice ' + (parsed.warnings.length ? 'warn' : '');
+
+        getElement('message').textContent =
+            `${label}：${this.data.length.toLocaleString()}件を読み込みました。` +
             (parsed.warnings.length ? '\n' + parsed.warnings.join(' ／ ') : '');
+
         this.render();
     }
 
@@ -1909,15 +2049,20 @@ class OperationsApp
     }
 
     /**
-     * サンプルデータと固定の計画値を表示する。
+     * サンプルデータを表示し、未設定の場合だけサンプル予算を補完する。
      * @returns {void} 引数なし。進行中のファイル読込結果を無効にする。
      */
     showSample()
     {
         this.readToken++;
         this.load(createSampleCsv(), 'サンプルデータ');
-        getElement('asof').value = CONFIG.demoReferenceDate;
-        getElement('budget').value = CONFIG.demoBudget;
+
+        // 復元・手動入力した予算と基準日は維持する。
+        if (!this.planningFields.has('budget'))
+        {
+            getElement('budget').value = CONFIG.demoBudget;
+        }
+
         this.render();
     }
 
