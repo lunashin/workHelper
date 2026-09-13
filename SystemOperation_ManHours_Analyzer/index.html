@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>運用業務分析ツール</title>
+        <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/vis-timeline@latest/styles/vis-timeline-graph2d.min.css"
+        />
+        <style>
+            /* 共通の配色：各画面要素からCSS変数で参照する */
+            :root {
+                --ink: #18304a;
+                --muted: #617086;
+                --line: #dbe3ec;
+                --blue: #1764ce;
+                --bg: #f2f5fa;
+                --teal: #00847d;
+                --red: #b52d40;
+            }
+            /* ページ構造と見出し */
+            * {
+                box-sizing: border-box;
+            }
+            body {
+                margin: 0;
+                background: var(--bg);
+                color: var(--ink);
+                font:
+                    16px/1.6 system-ui,
+                    -apple-system,
+                    "Segoe UI",
+                    sans-serif;
+            }
+            header {
+                background: #142b45;
+                color: white;
+                padding: 20px max(24px, calc((100vw - 1440px) / 2));
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
+            }
+            h1 {
+                font-size: 23px;
+                margin: 0;
+                font-weight: 700;
+            }
+            header small {
+                color: #bdcce0;
+            }
+            main {
+                max-width: 1488px;
+                margin: auto;
+                padding: 24px;
+            }
+            /* 入力とボタン：ホバー・キーボードフォーカス・無効状態 */
+            button,
+            input,
+            select {
+                font: inherit;
+            }
+            button {
+                cursor: pointer;
+                border: 1px solid var(--line);
+                border-radius: 7px;
+                background: white;
+                color: var(--ink);
+                padding: 9px 15px;
+            }
+            button:hover {
+                background: #eaf2ff;
+                border-color: #7ea8e6;
+            }
+            button:disabled {
+                opacity: 0.45;
+                cursor: default;
+            }
+            button.primary {
+                background: var(--blue);
+                color: white;
+                border-color: var(--blue);
+            }
+            button:focus-visible,
+            input:focus-visible,
+            select:focus-visible,
+            a:focus-visible {
+                outline: 3px solid #efaa23;
+                outline-offset: 3px;
+            }
+            a {
+                color: var(--blue);
+            }
+            input,
+            select {
+                background: white;
+                border: 1px solid #b9c8d8;
+                border-radius: 6px;
+                padding: 7px 9px;
+                max-width: 100%;
+                color: var(--ink);
+            }
+            input[type="number"] {
+                width: 125px;
+            }
+            input[type="checkbox"] {
+                width: 18px;
+                height: 18px;
+                accent-color: var(--blue);
+            }
+            /* CSVドロップ領域と共通パネル */
+            .drop {
+                border: 2px dashed #8aa8cb;
+                border-radius: 12px;
+                background: #fafdff;
+                padding: 22px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 18px;
+            }
+            .drop.over {
+                background: #e3f0ff;
+                border-color: var(--blue);
+            }
+            .drop strong {
+                font-size: 19px;
+            }
+            .subtle {
+                font-size: 14px;
+                color: var(--muted);
+            }
+            .actions {
+                display: flex;
+                gap: 9px;
+                flex-wrap: wrap;
+                align-items: center;
+            }
+            .panel {
+                background: white;
+                border: 1px solid var(--line);
+                border-radius: 10px;
+                padding: 20px;
+                margin-top: 18px;
+            }
+            .controls {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 16px;
+                align-items: end;
+            }
+            .controls label {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                font-size: 14px;
+            }
+            .controls .check {
+                flex-direction: row;
+                align-items: center;
+                padding-bottom: 9px;
+            }
+            /* 通知と集計ルール */
+            .notice {
+                padding: 10px 0;
+                font-size: 14px;
+                white-space: pre-wrap;
+            }
+            .notice.error {
+                color: var(--red);
+            }
+            .notice.warn {
+                color: #855207;
+            }
+            details summary {
+                cursor: pointer;
+                color: var(--blue);
+                font-size: 14px;
+            }
+            details p,
+            details li {
+                font-size: 14px;
+            }
+            details ul {
+                padding-left: 24px;
+            }
+            /* KPIカード */
+            .kpis {
+                display: grid;
+                grid-template-columns: repeat(5, 1fr);
+                gap: 14px;
+                margin: 18px 0;
+            }
+            .kpi {
+                padding: 18px;
+                background: white;
+                border: 1px solid var(--line);
+                border-top: 3px solid var(--blue);
+                border-radius: 8px;
+            }
+            .kpi span {
+                font-size: 14px;
+                color: var(--muted);
+            }
+            .kpi strong {
+                display: block;
+                font-size: 29px;
+                line-height: 1.5;
+                letter-spacing: -0.5px;
+            }
+            .kpi small {
+                display: block;
+                font-size: 13px;
+                color: var(--muted);
+            }
+            .danger {
+                color: var(--red);
+            }
+            /* 分析タブとツールバー */
+            .tabs {
+                display: flex;
+                gap: 4px;
+                border-bottom: 1px solid #bdcddd;
+                overflow: auto;
+            }
+            .tabs button {
+                white-space: nowrap;
+                border: 0;
+                border-radius: 8px 8px 0 0;
+                background: transparent;
+                padding: 13px 22px;
+                font-weight: 650;
+            }
+            .tabs button[aria-selected="true"] {
+                background: white;
+                border-bottom: 3px solid var(--blue);
+                color: var(--blue);
+            }
+            .toolbar {
+                display: flex;
+                justify-content: space-between;
+                gap: 15px;
+                align-items: center;
+                flex-wrap: wrap;
+                margin: 18px 0;
+            }
+            .toolbar p {
+                margin: 0;
+            }
+            /* グラフ領域と凡例 */
+            .chart-head {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 15px;
+            }
+            h2 {
+                font-size: 19px;
+                margin: 0 0 4px;
+            }
+            h3 {
+                font-size: 16px;
+                margin: 0;
+            }
+            .chart-scroll {
+                overflow: auto;
+                margin-top: 12px;
+            }
+            .graph {
+                height: 290px;
+            }
+            .legend {
+                display: flex;
+                gap: 8px 18px;
+                flex-wrap: wrap;
+                margin-top: 12px;
+                font-size: 14px;
+            }
+            .legend i {
+                display: inline-block;
+                width: 12px;
+                height: 12px;
+                border-radius: 2px;
+                margin-right: 6px;
+            }
+            /* 集計表：見出し固定、横スクロール */
+            .table-scroll {
+                overflow: auto;
+                max-height: 420px;
+                margin-top: 12px;
+            }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                font-size: 14px;
+                white-space: nowrap;
+            }
+            th,
+            td {
+                border-bottom: 1px solid #e5ebf2;
+                padding: 9px 12px;
+                text-align: right;
+            }
+            th {
+                position: sticky;
+                top: 0;
+                background: #f1f5fa;
+                z-index: 1;
+                color: #486077;
+            }
+            td:first-child,
+            th:first-child {
+                text-align: left;
+            }
+            tbody tr:hover {
+                background: #f5f9ff;
+            }
+            td.wrap {
+                white-space: normal;
+                min-width: 200px;
+            }
+            /* 補足表示と空データ状態 */
+            footer {
+                font-size: 13px;
+                color: var(--muted);
+                padding: 28px 0;
+            }
+            .empty {
+                padding: 60px 20px;
+                text-align: center;
+                color: var(--muted);
+            }
+            .empty strong {
+                display: block;
+                color: var(--ink);
+                font-size: 21px;
+                margin-bottom: 7px;
+            }
+            [hidden] {
+                display: none !important;
+            }
+            .badge {
+                background: #e8f1ff;
+                color: var(--blue);
+                border-radius: 5px;
+                padding: 3px 8px;
+                font-size: 13px;
+            }
+            /* vis.jsの標準スタイルに対する見た目の調整 */
+            .vis-timeline {
+                border-color: #e2e9f0 !important;
+            }
+            .vis-text {
+                color: #526780 !important;
+                font-size: 13px;
+            }
+            .vis-grid.vis-minor {
+                border-color: #eef2f7 !important;
+            }
+            .vis-label {
+                fill: #526780 !important;
+            }
+            progress {
+                width: 100%;
+                height: 7px;
+                accent-color: var(--blue);
+            }
+            /* タブレット幅 */
+            @media (max-width: 1000px) {
+                .kpis {
+                    grid-template-columns: repeat(3, 1fr);
+                }
+            }
+            /* スマートフォン幅 */
+            @media (max-width: 650px) {
+                main {
+                    padding: 14px;
+                }
+                header {
+                    padding: 16px;
+                    display: block;
+                }
+                h1 {
+                    font-size: 20px;
+                }
+                .drop {
+                    align-items: start;
+                    flex-direction: column;
+                }
+                .kpis {
+                    grid-template-columns: repeat(2, 1fr);
+                }
+                .kpi strong {
+                    font-size: 24px;
+                }
+                .panel {
+                    padding: 14px;
+                }
+                .controls {
+                    gap: 10px;
+                }
+                .tabs button {
+                    padding: 12px;
+                }
+                .toolbar {
+                    align-items: start;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <h1>運用業務分析ツール</h1>
+            <small>工数消化・作業構成・予実の確認</small>
+        </header>
+        <main>
+            <!-- CSV入力：ドラッグ＆ドロップ・ファイル選択・文字コード -->
+            <section id="drop" class="drop" aria-label="CSVドロップ領域">
+                <div>
+                    <strong>CSVファイルをここにドロップ</strong>
+                    <div class="subtle">1ファイルずつ読み込みます。データはブラウザ内で処理します。</div>
+                </div>
+                <div class="actions">
+                    <label class="subtle">
+                        文字コード
+                        <select id="encoding">
+                            <option value="auto">自動判定</option>
+                            <option value="utf-8">UTF-8</option>
+                            <option value="shift_jis">Shift_JIS / CP932</option>
+                        </select>
+                    </label>
+                    <button class="primary" id="choose">CSVを選択</button>
+                    <button id="demo">サンプルで試す</button>
+                    <input type="file" id="file" accept=".csv,text/csv" hidden />
+                </div>
+            </section>
+            <!-- CSV読込結果・CDN読込状態の通知 -->
+            <div id="message" class="notice" role="status" aria-live="polite">CSVを読み込むと分析を開始できます。</div>
+            <div id="cdn" class="notice warn" role="status">グラフライブラリを読み込み中…</div>
+            <!-- 折りたたみ式の集計ルール。業務仕様変更時はJSの該当処理と合わせて更新する -->
+            <details class="panel">
+                <summary>集計ルール・CSV仕様を確認</summary>
+                <ul>
+                    <li>
+                        必須列：ステータス、作業名、着手予定日、予定工数、実績工数、定常業務No、気付き番号。四半期集計用の「実施時期」列も読み込みます。列名の変更はoperations-analyzer.js
+                        冒頭の COLUMNS で行えます。
+                    </li>
+                    <li>
+                        着手予定日：mm/dd/yyyy。工数：0以上、小数第1位まで（単位：時間）。空欄工数は0として集計し、警告します。空欄日付は日次・週次および日付指定時の集計から除外します。
+                    </li>
+                    <li>
+                        日次・週次は着手予定日基準、週は月曜始まりです。実際の作業日別消化量ではありません。週のラベルは開始日を表示します。日付のある最初～最後の期間の空白日・週は0で補完します。
+                    </li>
+                    <li>
+                        クオーターは実施時期の文字列ごとに集計します（例：2026年度Q1）。年度の異なるデータを混ぜる場合は年度を含めてください。空欄・列なしは「未設定」にまとめ、日付から推定しません。
+                    </li>
+                    <li>
+                        作業種類は「定常業務No ×
+                        気付き番号」の組合せです。片方だけある場合はその番号、両方空なら「その他・未分類」。各アイテムを1回のみ計上します。新規作業の専用列がないため、新規とは自動判定しません。
+                    </li>
+                    <li>
+                        取り下げは初期状態で除外します。ほかのステータスはすべて含みます。重複行も別アイテムとして計数します。再読込はデータの置換です。
+                    </li>
+                    <li>
+                        グラフは選択範囲の全データを表示。消化状況は計画期間内かつ基準日以前の着手予定日を対象に算出します。期末見込＝基準日までの実績÷経過暦日×計画期間の暦日。日付不明は見込から除き、基準日前・予算未入力時は算出しません。
+                    </li>
+                    <li>
+                        予実差＝実績−予定。差率＝差÷予定。予定0の場合は「—」。完了のみの切替で、未完了の作業が予実比較に混ざる影響を除けます。
+                    </li>
+                    <li>
+                        割合の分母は各期間の実績工数合計です。合計0なら棒は0、割合の数値は「—」とします。全期間は画面で選んだ範囲を指します。
+                    </li>
+                </ul>
+            </details>
+            <!-- 日付・ステータスによる集計条件 -->
+            <section class="panel controls" aria-label="集計条件">
+                <label>
+                    集計開始日
+                    <input id="from" type="date" />
+                </label>
+                <label>
+                    集計終了日
+                    <input id="to" type="date" />
+                </label>
+                <label>
+                    ステータス
+                    <select id="status">
+                        <option value="">すべて</option>
+                        <option>申請中</option>
+                        <option>作業中</option>
+                        <option>完了</option>
+                        <option>取り下げ</option>
+                    </select>
+                </label>
+                <label class="check">
+                    <input id="withdraw" type="checkbox" />
+                    取り下げを含める
+                </label>
+                <button id="reset">集計条件をリセット</button>
+            </section>
+            <!-- 消化状況に使用する計画期間・基準日・予算 -->
+            <section class="panel">
+                <div class="controls">
+                    <label>
+                        計画開始日
+                        <input type="date" id="planStart" />
+                    </label>
+                    <label>
+                        計画終了日
+                        <input type="date" id="planEnd" />
+                    </label>
+                    <label>
+                        消化状況の基準日
+                        <input type="date" id="asof" />
+                    </label>
+                    <label>
+                        期間予算（時間）
+                        <input id="budget" type="number" min="0.1" step="0.1" placeholder="例：1,000" />
+                    </label>
+                </div>
+                <p class="subtle" style="margin-bottom: 0">
+                    消化状況にも上の集計条件を適用します。予算と比較する際は、計画期間の全作業が集計対象になっていることを確認してください。
+                </p>
+            </section>
+            <!-- KPIと消化ペース。DashboardViewが内容を生成する -->
+            <div id="kpis" class="kpis"></div>
+            <div id="pace" class="notice"></div>
+            <!-- 分析タブ。data-tabはJSのactiveTabと対応する -->
+            <div class="tabs" role="tablist" aria-label="分析表示">
+                <button
+                    role="tab"
+                    id="tab-hours"
+                    aria-selected="true"
+                    aria-controls="charts"
+                    data-tab="hours"
+                >
+                    工数の推移
+                </button>
+                <button
+                    role="tab"
+                    id="tab-types"
+                    aria-selected="false"
+                    aria-controls="charts"
+                    data-tab="types"
+                >
+                    作業種類・割合
+                </button>
+                <button
+                    role="tab"
+                    id="tab-counts"
+                    aria-selected="false"
+                    aria-controls="charts"
+                    data-tab="counts"
+                >
+                    作業発生回数
+                </button>
+                <button
+                    role="tab"
+                    id="tab-variance"
+                    aria-selected="false"
+                    aria-controls="charts"
+                    data-tab="variance"
+                >
+                    予実比較
+                </button>
+            </div>
+            <!-- タブ固有の表示条件と集計CSV保存 -->
+            <div class="toolbar">
+                <p id="scope" class="subtle">データ未読込</p>
+                <div class="actions">
+                    <label id="typeModeWrap" hidden>
+                        表示
+                        <select id="typeMode">
+                            <option value="hours">実績工数（時間）</option>
+                            <option value="percent">構成比（%）</option>
+                        </select>
+                    </label>
+                    <label id="completedWrap" hidden>
+                        <input id="completed" type="checkbox" checked />
+                        完了のみ
+                    </label>
+                    <button id="export" disabled>集計CSVを保存</button>
+                </div>
+            </div>
+            <!-- グラフ・凡例・集計表。OperationsApp.renderから再構築する -->
+            <section id="charts" role="tabpanel" aria-labelledby="tab-hours">
+                <div class="empty">
+                    <strong>運用工数を、期間と作業種類から確認</strong>
+                    CSVを読み込むか、「サンプルで試す」を選んでください。
+                </div>
+            </section>
+            <!-- ライブラリの説明とサンプルCSVの保存 -->
+            <footer>
+                グラフ：vis.js Graph2d（vis-timeline / jsDelivr
+                @latest）。初回表示にはCDNへの接続が必要です。CSVの外部送信・自動保存は行いません。
+                <button id="sampleDownload">サンプルCSVを保存</button>
+            </footer>
+        </main>
+        <!-- アプリ処理：同じフォルダーのJSをDOM構築後に実行する -->
+        <script src="./operations-analyzer.js" defer></script>
+    </body>
+</html>
