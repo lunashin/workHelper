@@ -1092,11 +1092,10 @@ class GraphRenderer
             return;
         }
 
-        // 期間が多い場合は横スクロールさせ、すべての期間名を表示する。
-        // Chart.jsは親要素を基準にリサイズするため、Canvas専用の親を使用する。
-        const cellWidth = buckets.length <= 4 ? 180 : 100;
+        // 全期間を表示領域の幅に収める。期間数による最小幅は設定しない。
+        // Chart.jsが親要素の幅に合わせて棒の幅と横軸ラベルを調整する。
         container.style.width = '100%';
-        container.style.minWidth = (buckets.length * cellWidth + 110) + 'px';
+        container.style.minWidth = '0';
 
         const canvas = document.createElement('canvas');
         canvas.setAttribute('role', 'img');
@@ -1130,8 +1129,8 @@ class GraphRenderer
                 backgroundColor: series.color,
                 borderColor: series.color,
                 borderWidth: 1,
-                barThickness: Math.min(64, cellWidth * 0.65) /
-                    (model.stacked ? 1 : model.series.length),
+
+                // 固定幅は指定せず、期間数と表示幅から自動計算する。
                 maxBarThickness: 64,
                 categoryPercentage: 0.8,
                 barPercentage: 0.8
@@ -1164,7 +1163,10 @@ class GraphRenderer
                         display: false
                     },
                     ticks: {
-                        autoSkip: false,
+                        // ラベルだけを間引き、棒と集計データはすべて保持する。
+                        autoSkip: true,
+                        maxTicksLimit: 12,
+                        autoSkipPadding: 12,
                         maxRotation: 0,
                         minRotation: 0,
                         color: '#526780',
@@ -1430,7 +1432,7 @@ class DashboardView
         }
         if (buckets.length > 10)
         {
-            description += ' ／ 横スクロールで全期間を確認';
+            description += ' ／ 横軸ラベルは表示幅に合わせて間引き（棒は全期間を表示）';
         }
 
         // CSV由来の系列名は、HTMLに挿入する前にエスケープする。

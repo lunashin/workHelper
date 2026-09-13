@@ -259,15 +259,26 @@
                 font-size: 16px;
                 margin: 0;
             }
-            .chart-scroll {
-                overflow: auto;
+            /* 各グラフを表示領域の横幅に収める */
+            .chart-scroll
+            {
+                width: 100%;
+                min-width: 0;
+                overflow: hidden;
                 margin-top: 12px;
             }
-            /* Chart.jsのCanvas専用親：高さを固定し、横幅はJSで期間数に合わせる */
+            /* Canvas専用の親要素：高さを固定し、幅は表示領域に追従する */
             .graph
             {
                 position: relative;
+                width: 100%;
+                min-width: 0;
+                max-width: 100%;
                 height: 290px;
+            }
+            .graph canvas
+            {
+                display: block;
             }
             .legend {
                 display: flex;
