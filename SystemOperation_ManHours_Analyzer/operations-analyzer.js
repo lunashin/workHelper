@@ -949,7 +949,7 @@ class AnalysisService
      * 選択条件を適用済みの作業を、指定した番号ごとに集計する。
      * @param {Task[]} rows 日付・ステータス条件で絞り込んだ作業。
      * @param {string} field routine（定常業務No）またはissue（気付き番号）。
-     * @returns {Bucket[]} 番号の自然順で並べた集計。対象番号が空欄の行は除く。
+     * @returns {Bucket[]} 実績工数の降順で並べた集計。同工数は番号順。対象番号の空欄は除く。
      */
     static numberBuckets(rows, field)
     {
@@ -970,29 +970,30 @@ class AnalysisService
             grouped.get(number).push(task);
         }
 
-        // 2→10、4-2→4-10のように、文字列中の数字を自然順で並べる。
-        const numbers = Array.from(grouped.keys()).sort(compareNumbers);
+        // 番号ごとに工数・件数を集計する。
         const result = [];
-        for (const number of numbers)
+        for (const [number, numberRows] of grouped)
         {
-            const numberRows = grouped.get(number);
             result.push({
                 label: number,
                 rows: numberRows,
                 ...AnalysisService.total(numberRows)
             });
         }
-        return result;
+
+        // 実績工数が多い順に並べ、同工数の場合は番号の自然順とする。
+        return result.sort(compareBuckets);
 
         /**
-         * 番号を数値部分を考慮した自然順で比較する。
-         * @param {string} first 比較対象の番号1。
-         * @param {string} second 比較対象の番号2。
+         * 実績工数の降順、番号の自然順で集計結果を比較する。
+         * @param {Bucket} first 比較対象の集計1。
+         * @param {Bucket} second 比較対象の集計2。
          * @returns {number} sort用の比較結果。
          */
-        function compareNumbers(first, second)
+        function compareBuckets(first, second)
         {
-            return first.localeCompare(second, 'ja', { numeric: true });
+            return second.actual - first.actual ||
+                first.label.localeCompare(second.label, 'ja', { numeric: true });
         }
     }
 
