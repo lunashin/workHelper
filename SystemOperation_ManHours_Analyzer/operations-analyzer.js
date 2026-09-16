@@ -1152,11 +1152,12 @@ class GraphRenderer
     /**
      * 指定要素にCanvasを作成し、棒グラフを描画する。
      * @param {HTMLElement} container .graph要素。
-     * @param {Bucket[]} buckets 横軸の期間一覧。
+     * @param {Bucket[]} buckets 横軸の項目一覧。
      * @param {ChartModel} model 系列・数値・単位・積み上げ設定。
+     * @param {string} period 集計キー。dayの場合のみ横軸ラベルを自動で間引く。
      * @returns {void} CDN未読込・描画失敗時は代替メッセージを表示する。
      */
-    draw(container, buckets, model)
+    draw(container, buckets, model, period)
     {
         if (typeof window.Chart !== 'function')
         {
@@ -1233,26 +1234,19 @@ class GraphRenderer
                         display: false
                     },
                     ticks: {
-                        // 右上がり45度に固定する。
-                        // 下側の横軸では、Chart.jsが文字列の末尾を目盛り側に配置する。
+                        // 標準機能で右上がり45度に固定する。
                         minRotation: 45,
                         maxRotation: 45,
-
-                        // ラベルは対応する目盛りの位置で、軸の外側に表示する。
                         align: 'center',
                         crossAlign: 'near',
                         mirror: false,
                         labelOffset: 0,
 
-                        // 表示数の固定上限を設けず、収まる範囲で多く表示する。
-                        // 間引くのはラベルだけで、棒や集計データは省略しない。
-                        autoSkip: true,
+                        // 日次のみ自動で間引き、それ以外は全項目を表示する。
+                        autoSkip: period === 'day',
                         autoSkipPadding: 4,
-
                         color: '#526780',
-                        font: {
-                            size: 13
-                        }
+                        font: { size: 13 }
                     }
                 },
                 y: {
@@ -1516,8 +1510,8 @@ class DashboardView
             description = `横軸：${escapeHtml(COLUMNS[period])} ／ 選択条件内の実績工数（番号空欄を除く）`;
         }
 
-        // データ数が多い場合は、ラベルの自動間引きを案内する。
-        if (buckets.length > 10)
+        // ラベルの自動間引きに関する案内は日次だけに表示する。
+        if (period === 'day' && buckets.length > 10)
         {
             description += ' ／ 横軸ラベルは表示幅に合わせて間引き（棒はすべて表示）';
         }
@@ -2006,7 +2000,7 @@ class OperationsApp
                 // 対象番号がある場合は描画し、ない場合は案内を表示する。
                 if (buckets.length)
                 {
-                    this.graphRenderer.draw(container, buckets, model);
+                    this.graphRenderer.draw(container, buckets, model, field);
                 }
                 else
                 {
@@ -2030,7 +2024,7 @@ class OperationsApp
             }
             const model = AnalysisService.chartModel(buckets, this.activeTab, types, getElement('typeMode').value);
             const container = DashboardView.appendChartPanel(period, buckets, model);
-            this.graphRenderer.draw(container, buckets, model);
+            this.graphRenderer.draw(container, buckets, model, period);
             this.exportRows.push([PERIOD_LABELS[period]], model.headers, ...model.tableRows, []);
         }
 
