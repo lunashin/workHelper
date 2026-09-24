@@ -42,14 +42,15 @@ const COLORS = Object.freeze([
     '#446575', '#63a342', '#bb5a24', '#318fb3', '#ac7294'
 ]);
 
-/** 期間キーと画面上の見出しの対応。 */
+/** 期間・集計キーと画面上の見出しの対応。 */
 const PERIOD_LABELS = Object.freeze({
     all: '全期間',
     quarter: 'クオーター毎',
     week: '週次',
     day: '日次',
     routine: '定常業務No別の実績工数',
-    issue: '気付き番号別の実績工数'
+    issue: '気付き番号別の実績工数',
+    numbers: '定常業務No・気付き番号別の実績工数'
 });
 
 /** HTMLへデータを挿入するときのエスケープ規則。 */
@@ -998,6 +999,44 @@ class AnalysisService
     }
 
     /**
+     * 定常業務No別・気付き番号別の集計を統合する。
+     * @param {Task[]} rows 選択条件で絞り込んだ作業。
+     * @returns {Bucket[]} 種別付きの番号を持つ、実績工数降順の集計。
+     */
+    static combinedNumberBuckets(rows)
+    {
+        const result = [];
+
+        // 種別をラベルに付け、同じ文字列の番号を区別する。
+        // 両方の番号を持つ作業は、それぞれの番号に計上する。
+        for (const field of ['routine', 'issue'])
+        {
+            for (const bucket of AnalysisService.numberBuckets(rows, field))
+            {
+                result.push({
+                    ...bucket,
+                    label: `${COLUMNS[field]}: ${bucket.label}`
+                });
+            }
+        }
+
+        // 全種別を通して実績工数の多い順に並べる。
+        return result.sort(compareBuckets);
+
+        /**
+         * 実績工数の降順、同工数ならラベルの自然順で比較する。
+         * @param {Bucket} first 比較対象の集計1。
+         * @param {Bucket} second 比較対象の集計2。
+         * @returns {number} sort用の比較結果。
+         */
+        function compareBuckets(first, second)
+        {
+            return second.actual - first.actual ||
+                first.label.localeCompare(second.label, 'ja', { numeric: true });
+        }
+    }    
+
+    /**
      * 作業種類タブのグラフ値と集計表を作る。
      * @param {Bucket[]} buckets 期間別の集計結果。
      * @param {string[]} types 画面全体で統一する種類の順序。
@@ -1484,8 +1523,8 @@ class DashboardView
     }
 
     /**
-     * グラフの見出し・凡例・集計表を画面に追加する。
-     * @param {string} period 期間キー、またはroutine・issueの番号別集計キー。
+     * グラフの見出し・凡例・集計表・CSV保存ボタンを画面に追加する。
+     * @param {string} period 期間キー、または番号別集計キー。
      * @param {Bucket[]} buckets 集計結果。
      * @param {ChartModel} model グラフと集計表のモデル。
      * @returns {HTMLElement} Chart.js用Canvasを配置する.graph要素。
@@ -1510,6 +1549,10 @@ class DashboardView
         {
             description = `横軸：${escapeHtml(COLUMNS[period])} ／ 選択条件内の実績工数（番号空欄を除く）`;
         }
+        else if (period === 'numbers')
+        {
+            description = '横軸：定常業務No・気付き番号 ／ 実績工数の多い順。両番号を持つ作業は各番号に計上します。';
+        }
 
         // ラベルの自動間引きに関する案内は日次だけに表示する。
         if (period === 'day' && buckets.length > 10)
@@ -1524,7 +1567,7 @@ class DashboardView
             legend += `<span><i style="background:${series.color}"></i>${escapeHtml(series.label)}</span>`;
         }
 
-        // グラフ領域・凡例・集計表をまとめて追加する。
+        // グラフ領域・凡例・集計表を作成する。
         const panel = document.createElement('article');
         panel.className = 'panel';
         panel.innerHTML =
@@ -1534,8 +1577,28 @@ class DashboardView
             `<div class="legend">${legend}</div>` +
             `<details><summary>集計値を確認（${model.tableRows.length.toLocaleString()}行）</summary>` +
             DashboardView.table(model.headers, model.tableRows) + '</details>';
+
+        // このグラフの表に表示している列と行だけをCSVへ出力する。
+        const csvButton = document.createElement('button');
+        csvButton.type = 'button';
+        csvButton.textContent = 'この集計値をCSVダウンロード';
+        csvButton.disabled = model.tableRows.length === 0;
+        csvButton.addEventListener('click', downloadChartCsv);
+        panel.querySelector('details').appendChild(csvButton);
+
+        // パネルを画面に追加し、グラフの描画先を返す。
         getElement('charts').appendChild(panel);
         return panel.querySelector('.graph');
+
+        /**
+         * このパネルの集計表をUTF-8 BOM付きCSVとして保存する。
+         * @returns {void} 引数なし。表示中のヘッダと行を出力する。
+         */
+        function downloadChartCsv()
+        {
+            const filename = `集計値_${PERIOD_LABELS[period]}_${todayInputValue()}.csv`;
+            CsvService.download(filename, CsvService.stringify([model.headers, ...model.tableRows]));
+        }
     }
 }
 
@@ -1990,27 +2053,23 @@ class OperationsApp
         // 種類タブの先頭に番号別の実績工数を追加する。割合表示の切替には連動しない。
         if (this.activeTab === 'types')
         {
-            for (const field of ['routine', 'issue'])
+            const buckets = AnalysisService.combinedNumberBuckets(rows);
+            const model = AnalysisService.chartModel(buckets, 'hours', [], 'hours');
+            model.headers[0] = '種別・番号';
+            const container = DashboardView.appendChartPanel('numbers', buckets, model);
+
+            // 対象番号がある場合は描画し、ない場合は案内を表示する。
+            if (buckets.length)
             {
-                // 上部の集計期間・ステータス条件を適用した作業を番号別に集計する。
-                const buckets = AnalysisService.numberBuckets(rows, field);
-                const model = AnalysisService.chartModel(buckets, 'hours', [], 'hours');
-                model.headers[0] = COLUMNS[field];
-                const container = DashboardView.appendChartPanel(field, buckets, model);
-
-                // 対象番号がある場合は描画し、ない場合は案内を表示する。
-                if (buckets.length)
-                {
-                    this.graphRenderer.draw(container, buckets, model, field);
-                }
-                else
-                {
-                    container.innerHTML = '<div class="empty">選択条件内に番号が設定された作業はありません。</div>';
-                }
-
-                // 画面の集計表と同じ内容を、既存の集計CSV保存にも含める。
-                this.exportRows.push([PERIOD_LABELS[field]], model.headers, ...model.tableRows, []);
+                this.graphRenderer.draw(container, buckets, model, 'numbers');
             }
+            else
+            {
+                container.innerHTML = '<div class="empty">選択条件内に番号が設定された作業はありません。</div>';
+            }
+
+            // タブ全体のCSVにも統合後の集計を含める。
+            this.exportRows.push([PERIOD_LABELS.numbers], model.headers, ...model.tableRows, []);
         }
 
         // 期間ごとのモデルを、グラフ・表・CSVで共用する。
