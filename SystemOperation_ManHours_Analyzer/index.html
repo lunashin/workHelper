@@ -403,6 +403,44 @@
                     align-items: start;
                 }
             }
+
+            /* チェックボックスを丸角の選択ボタンとして表示する。 */
+            .number-choices {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                margin: 10px 0 16px;
+            }
+
+            .number-choice {
+                position: relative;
+                display: inline-flex;
+                cursor: pointer;
+            }
+
+            .number-choice input {
+                position: absolute;
+                width: 1px;
+                height: 1px;
+                opacity: 0;
+            }
+
+            .number-choice span {
+                padding: 7px 14px;
+                border-radius: 12px;
+                background: #e2e8f0;
+                color: #334155;
+            }
+
+            .number-choice input:checked + span {
+                background: #2563eb;
+                color: #fff;
+            }
+
+            .number-choice input:focus-visible + span {
+                outline: 3px solid #0f172a;
+                outline-offset: 3px;
+            }
         </style>
     </head>
     <body>
@@ -495,6 +533,36 @@
                 </label>
                 <button id="reset">集計条件をリセット</button>
             </section>
+
+            <!-- 番号の選択は「反映」を押した時点で集計に適用する。 -->
+            <section class="panel" id="numberFilters" aria-label="番号による絞り込み">
+                <h2>集計対象の番号</h2>
+                <p class="subtle">
+                    青：ON ／ 灰色：OFF。両列の選択条件を満たす作業を集計します。
+                </p>
+
+                <h3 id="routineChoicesLabel">定常業務No</h3>
+                <div
+                    id="routineChoices"
+                    class="number-choices"
+                    role="group"
+                    aria-labelledby="routineChoicesLabel">
+                </div>
+
+                <h3 id="issueChoicesLabel">気付き番号</h3>
+                <div
+                    id="issueChoices"
+                    class="number-choices"
+                    role="group"
+                    aria-labelledby="issueChoicesLabel">
+                </div>
+
+                <button id="applyNumbers" type="button" disabled>反映</button>
+                <span id="numberFilterState" class="subtle" role="status">
+                    CSVを読み込んでください。
+                </span>
+            </section>
+
             <!-- 消化状況に使用する計画期間・基準日・予算 -->
             <section class="panel">
                 <div class="controls">

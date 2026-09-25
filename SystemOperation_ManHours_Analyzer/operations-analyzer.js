@@ -1736,6 +1736,106 @@ class PlanningSettings
 // アプリ制御：共有状態、イベント、取込から再描画までの処理順序
 // =============================================================================
 
+/** 番号の選択画面と、反映済みの絞り込み条件を管理する。 */
+class NumberFilter
+{
+    /**
+     * 反映済み条件を初期化する。
+     * @returns {NumberFilter} 引数なし。未読込時は絞り込まない。
+     */
+    constructor()
+    {
+        /** @type {Object|null} 反映済みの番号集合。編集中の選択とは分離する。 */
+        this.applied = null;
+    }
+
+    /**
+     * CSVの番号一覧を作成し、すべてONで条件を初期化する。
+     * @param {Task[]} rows 読み込んだ全作業。
+     * @returns {void} 選択画面と反映済み条件を更新する。
+     */
+    reset(rows)
+    {
+        for (const field of ['routine', 'issue'])
+        {
+            const container = getElement(field + 'Choices');
+            container.replaceChildren();
+
+            const numbers = Array.from(new Set(rows.map(task => task[field])));
+            numbers.sort(compareNumbers);
+
+            // 番号をHTMLとして解釈させず、安全に表示する。
+            for (const number of numbers)
+            {
+                const label = document.createElement('label');
+                label.className = 'number-choice';
+
+                const input = document.createElement('input');
+                input.type = 'checkbox';
+                input.value = number;
+                input.checked = true;
+
+                const text = document.createElement('span');
+                text.textContent = number || '未設定';
+
+                label.append(input, text);
+                container.appendChild(label);
+            }
+        }
+
+        // 読み込み直後は全番号を反映済みにする。
+        getElement('applyNumbers').disabled = rows.length === 0;
+        this.apply();
+
+        /**
+         * 番号を自然順で比較する。
+         * @param {string} first 比較対象1。
+         * @param {string} second 比較対象2。
+         * @returns {number} sort用の比較結果。
+         */
+        function compareNumbers(first, second)
+        {
+            return first.localeCompare(second, 'ja', { numeric: true });
+        }
+    }
+
+    /**
+     * チェック状態を反映済み条件として確定する。
+     * @returns {void} 引数なし。再描画は呼出元が行う。
+     */
+    apply()
+    {
+        this.applied = {};
+
+        // チェック状態のコピーを保存し、その後の画面操作と分離する。
+        for (const field of ['routine', 'issue'])
+        {
+            const selected = new Set();
+
+            for (const input of getElement(field + 'Choices').querySelectorAll('input:checked'))
+            {
+                selected.add(input.value);
+            }
+
+            this.applied[field] = selected;
+        }
+
+        getElement('numberFilterState').textContent = '選択条件を反映済み';
+    }
+
+    /**
+     * 作業が反映済みの番号条件に一致するか判定する。
+     * @param {Task} task 判定対象の作業。
+     * @returns {boolean} 両列の選択条件に一致する場合はtrue。
+     */
+    matches(task)
+    {
+        return this.applied === null ||
+            (this.applied.routine.has(task.routine) &&
+             this.applied.issue.has(task.issue));
+    }
+}
+
 /** 画面と各サービスをつなぐ。可変状態はすべてこのクラスで宣言する。 */
 class OperationsApp
 {
@@ -1761,6 +1861,8 @@ class OperationsApp
         this.graphRenderer = new GraphRenderer();
         /** @type {Set<string>} 復元済み・手動変更済みの計画項目。自動補完から保護する。 */
         this.planningFields = new Set();
+        /** @type {NumberFilter} 番号の編集中・反映済み条件を管理する。 */
+        this.numberFilter = new NumberFilter();
     }
 
     /**
@@ -1818,6 +1920,13 @@ class OperationsApp
             button.onclick = this.switchTab.bind(this, button);
             button.onkeydown = this.onTabKeydown.bind(this, index);
         }
+
+        // 番号の選択変更と、集計への反映を別々に処理する。
+        getElement('applyNumbers').onclick = this.applyNumberFilters.bind(this);
+        getElement('numberFilters').addEventListener(
+            'change',
+            this.markNumberFiltersPending.bind(this)
+        );
     }
 
     /**
@@ -1912,12 +2021,13 @@ class OperationsApp
     }
 
     /**
-     * 日付・ステータスの集計条件だけを初期値に戻す。
+     * 日付・ステータス・番号の集計条件を初期値に戻す。
      * @returns {void} 引数なし。予算・タブ・完了のみ条件は維持する。
      */
     resetFilters()
     {
         this.clearFilterInputs();
+        this.numberFilter.reset(this.data);
         this.render();
     }
 
@@ -2027,6 +2137,9 @@ class OperationsApp
         try
         {
             rows = AnalysisService.filter(this.data, this.readFilters());
+
+            // 「反映」で確定済みの番号条件だけを集計に適用する。
+            rows = rows.filter(this.numberFilter.matches.bind(this.numberFilter));
         }
         catch (error)
         {
@@ -2135,6 +2248,16 @@ class OperationsApp
         // 基準日は変更しない。起動時の今日、またはユーザーの指定日を維持する。
         this.clearFilterInputs();
 
+        // 着手予定日の最小・最大日を集計期間に設定する。
+        // 着手予定日が全件空欄の場合は、集計期間も空欄にする。
+        getElement('from').value =
+            Number.isFinite(parsed.min) ? toIsoDate(parsed.min) : '';
+        getElement('to').value =
+            Number.isFinite(parsed.max) ? toIsoDate(parsed.max) : '';
+
+        // CSV読み込みのたびに番号一覧を作り直し、全番号をONにする。
+        this.numberFilter.reset(this.data);
+
         getElement('message').className =
             'notice ' + (parsed.warnings.length ? 'warn' : '');
 
@@ -2225,6 +2348,8 @@ class OperationsApp
             ['集計開始日', getElement('from').value || '指定なし'],
             ['集計終了日', getElement('to').value || '指定なし'],
             ['ステータス', getElement('status').value || 'すべて'],
+            ['定常業務No（反映済み）', this.numberFilter.applied ? JSON.stringify(Array.from(this.numberFilter.applied.routine)) : 'すべて'],
+            ['気付き番号（反映済み）',this.numberFilter.applied ? JSON.stringify(Array.from(this.numberFilter.applied.issue)) : 'すべて'],
             ['取り下げを含む', getElement('withdraw').checked ? 'はい' : 'いいえ'],
             ['完了のみ', this.activeTab === 'variance' && getElement('completed').checked ? 'はい' : 'いいえ'],
             [], ...this.exportRows
@@ -2268,6 +2393,26 @@ class OperationsApp
     {
         getElement('cdn').textContent = 'グラフライブラリを読み込めません。ネットワークとCDNへの接続を確認してください。CSV取込・集計表は利用できます。';
         this.render();
+    }
+
+    /**
+     * 番号条件を確定し、グラフ・表・消化状況を再描画する。
+     * @returns {void} 引数なし。
+     */
+    applyNumberFilters()
+    {
+        this.numberFilter.apply();
+        this.render();
+    }
+
+    /**
+     * チェック変更が未反映であることを表示する。
+     * @returns {void} 引数なし。反映済み条件は変更しない。
+     */
+    markNumberFiltersPending()
+    {
+        getElement('numberFilterState').textContent =
+            '未反映の変更があります。「反映」を押してください。';
     }
 }
 
