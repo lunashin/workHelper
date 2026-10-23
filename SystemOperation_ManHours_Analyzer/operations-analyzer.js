@@ -16,18 +16,18 @@
 /** CSVの列名。元ファイルの列名に合わせる場合は、この対応表を変更する。 */
 const COLUMNS = Object.freeze({
     status: 'ステータス',
-    name: '作業名',
-    date: '着手予定日',
-    planned: '予定工数',
+    name: '作業概要',
+    date: '着手開始予定日',
+    planned: '申請工数',
     actual: '実績工数',
     routine: '定常業務No',
-    issue: '気付き番号',
+    issue: '気づき番号',
     quarter: '実施時期'
 });
 
 /** 入力制限、日付計算、グラフ読込先、サンプル表示の設定。 */
 const CONFIG = Object.freeze({
-    statuses: Object.freeze(['申請中', '作業中', '取り下げ', '完了']),
+    statuses: Object.freeze(['申請中', '作業中', '中断中', '対応不要', '完了', '引取り']),
     maxBytes: 30 * 1024 * 1024,
     maxSpanDays: 36600,
     millisecondsPerDay: 86400000,
