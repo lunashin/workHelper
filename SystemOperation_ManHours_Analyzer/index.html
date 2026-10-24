@@ -557,6 +557,8 @@
                     aria-labelledby="issueChoicesLabel">
                 </div>
 
+                <button id="numbersOn" type="button" disabled>全てON</button>
+                <button id="numbersOff" type="button" disabled>全てOFF</button>
                 <button id="applyNumbers" type="button" disabled>反映</button>
                 <span id="numberFilterState" class="subtle" role="status">
                     CSVを読み込んでください。
@@ -587,6 +589,18 @@
                     消化状況にも上の集計条件を適用します。予算と比較する際は、計画期間の全作業が集計対象になっていることを確認してください。
                 </p>
             </section>
+
+            <section class="panel">
+                <label>
+                    <input id="usePlannedForWorking" type="checkbox" />
+                    作業中の作業は申請工数で集計する
+                </label>
+                <p class="subtle">
+                    ONの場合、作業中の実績工数を申請工数に置き換えて集計します。
+                    グラフ・KPI・集計表・CSV出力に適用し、元の実績値は保持します。
+                </p>
+            </section>
+
             <!-- KPIと消化ペース。DashboardViewが内容を生成する -->
             <div id="kpis" class="kpis"></div>
             <div id="pace" class="notice"></div>
@@ -658,7 +672,7 @@
         <footer>
             グラフ：Chart.js 4.5.1（jsDelivr）。
             初回表示にはCDNへの接続が必要です。
-            CSVの外部送信・自動保存は行いません。
+            CSVの外部送信は行いません。集計に必要な列のみブラウザに保存し、次回復元します。
             <button id="sampleDownload">サンプルCSVを保存</button>
         </footer>
         </main>

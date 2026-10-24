@@ -61,13 +61,22 @@ const HTML_ENTITIES = Object.freeze({
 /** 条件変更で画面を再描画する入力要素のID。 */
 const FILTER_CONTROL_IDS = Object.freeze([
     'from', 'to', 'status', 'withdraw', 'planStart', 'planEnd',
-    'asof', 'budget', 'typeMode', 'completed'
+    'asof', 'budget', 'typeMode', 'completed', 'usePlannedForWorking'
 ]);
 
 /** 保存先キーと保存対象。基準日は保存対象に含めない。 */
 const PLANNING_STORAGE = Object.freeze({
     prefix: 'operations-analyzer.planning.v1.',
     fields: Object.freeze(['planStart', 'planEnd', 'budget'])
+});
+
+/** CSVから保存する列。作業概要・未使用列・派生値は保存しない。 */
+const DATA_STORAGE = Object.freeze({
+    key: 'operations-analyzer.data.v1',
+    fields: Object.freeze([
+        'status', 'date', 'planned', 'actual',
+        'routine', 'issue', 'quarter'
+    ])
 });
 
 /** アプリの唯一の共有インスタンス。可変データはこのインスタンス内で管理する。 */
@@ -1736,6 +1745,85 @@ class PlanningSettings
 // アプリ制御：共有状態、イベント、取込から再描画までの処理順序
 // =============================================================================
 
+/** 必要列だけを保存し、復元時も通常のCSV検証を通す。 */
+class ImportedDataStorage
+{
+    /**
+     * 元の工数を保存する。集計オプション適用後の値は保存しない。
+     * @param {Task[]} rows 読込済み作業。
+     * @param {string} label 元ファイル名。
+     * @returns {void} 容量超過・保存禁止時は例外を呼出元へ返す。
+     */
+    static save(rows, label)
+    {
+        const values = rows.map(task => DATA_STORAGE.fields.map(field =>
+        {
+            if (field === 'date')
+            {
+                return task.date === null ? '' :
+                    toIsoDate(task.date).replace(
+                        /^(\d{4})-(\d{2})-(\d{2})$/,
+                        '$2/$3/$1'
+                    );
+            }
+
+            if (field === 'planned' || field === 'actual')
+            {
+                return (task[field] / CONFIG.effortScale).toFixed(1);
+            }
+
+            return task[field];
+        }));
+
+        window.localStorage.setItem(
+            DATA_STORAGE.key,
+            JSON.stringify({ version: 1, label, rows: values })
+        );
+    }
+
+    /**
+     * 保存データをCSV形式に戻す。
+     * 作業概要は集計で使わないため仮名で補う。
+     * @returns {Object|null} CSVと元ファイル名。未保存ならnull。
+     * @throws {Error} 保存データの形式が不正な場合。
+     */
+    static restore()
+    {
+        const text = window.localStorage.getItem(DATA_STORAGE.key);
+        if (text === null)
+        {
+            return null;
+        }
+
+        const saved = JSON.parse(text);
+        if (!saved || saved.version !== 1 ||
+            typeof saved.label !== 'string' ||
+            !Array.isArray(saved.rows) || saved.rows.length === 0 ||
+            saved.rows.some(row => !Array.isArray(row) ||
+                row.length !== DATA_STORAGE.fields.length ||
+                row.some(value => typeof value !== 'string')))
+        {
+            throw Error('保存データの形式が不正です');
+        }
+
+        const headers = [
+            COLUMNS.name,
+            ...DATA_STORAGE.fields.map(field => COLUMNS[field])
+        ];
+
+        // 内部データの復元では、CSV出力用の数式保護による値の変更を避ける。
+        const records = [
+            headers,
+            ...saved.rows.map(row => ['保存データ', ...row])
+        ];
+        const csv = records.map(row => row.map(value =>
+            '"' + value.replaceAll('"', '""') + '"'
+        ).join(',')).join('\r\n');
+
+        return { csv, label: saved.label };
+    }
+}
+
 /** 番号の選択画面と、反映済みの絞り込み条件を管理する。 */
 class NumberFilter
 {
@@ -1784,6 +1872,8 @@ class NumberFilter
         }
 
         // 読み込み直後は全番号を反映済みにする。
+        getElement('numbersOn').disabled = rows.length === 0;
+        getElement('numbersOff').disabled = rows.length === 0;
         getElement('applyNumbers').disabled = rows.length === 0;
         this.apply();
 
@@ -1880,6 +1970,23 @@ class OperationsApp
         // 基準日は保存値を使用せず、起動時の今日を設定する。
         getElement('asof').value = todayInputValue();
 
+        try
+        {
+            const saved = ImportedDataStorage.restore();
+            if (saved)
+            {
+                this.load(saved.csv, saved.label, false);
+                getElement('message').textContent += '\n保存データを復元しました。';
+            }
+        }
+        catch (error)
+        {
+            getElement('message').className = 'notice warn';
+            getElement('message').textContent =
+                '保存データを復元できません。CSVを読み直してください。' +
+                error.message;
+        }        
+
         this.render();
         this.loadGraphLibrary();
     }
@@ -1922,6 +2029,8 @@ class OperationsApp
         }
 
         // 番号の選択変更と、集計への反映を別々に処理する。
+        getElement('numbersOn').onclick = this.setAllNumbers.bind(this, true);
+        getElement('numbersOff').onclick = this.setAllNumbers.bind(this, false);
         getElement('applyNumbers').onclick = this.applyNumberFilters.bind(this);
         getElement('numberFilters').addEventListener(
             'change',
@@ -2147,6 +2256,13 @@ class OperationsApp
             return;
         }
 
+        // 元データを変更せず、今回の集計に使う実績値だけを置き換える。
+        if (getElement('usePlannedForWorking').checked)
+        {
+            rows = rows.map(task => task.status === '作業中' ?
+                { ...task, actual: task.planned } : task);
+        }
+
         // KPIはタブ固有の「完了のみ」に連動しないという従来仕様を維持する。
         DashboardView.renderKpis(AnalysisService.budgetMetrics(rows, this.readPlanning()));
         if (this.activeTab === 'variance' && getElement('completed').checked)
@@ -2216,10 +2332,11 @@ class OperationsApp
      * CSVを検証し、成功したときだけ現在のデータを置き換える。
      * @param {string} text CSV全文。
      * @param {string} label ファイル名またはサンプル表示名。
+     * @param {boolean} [persist=true] 読込結果を保存するか。復元時はfalse。
      * @returns {void} 集計条件をリセットし、未設定の計画条件だけを補完する。
      * @throws {Error} 入力検証エラー。呼出元でメッセージを表示する。
      */
-    load(text, label)
+    load(text, label, persist = true)
     {
         const parsed = CsvService.normalize(text);
 
@@ -2264,6 +2381,22 @@ class OperationsApp
         getElement('message').textContent =
             `${label}：${this.data.length.toLocaleString()}件を読み込みました。` +
             (parsed.warnings.length ? '\n' + parsed.warnings.join(' ／ ') : '');
+
+        if (persist)
+        {
+            try
+            {
+                ImportedDataStorage.save(this.data, label);
+            }
+            catch (error)
+            {
+                getElement('message').className = 'notice warn';
+                getElement('message').textContent +=
+                    '\nブラウザに保存できませんでした。次回は今回のデータを復元できません。';
+
+                console.warn('集計データの保存失敗', error);
+            }
+        }
 
         this.render();
     }
@@ -2345,6 +2478,7 @@ class OperationsApp
     {
         const rows = [
             ['元ファイル', this.fileLabel],
+            ['作業中は申請工数で集計', getElement('usePlannedForWorking').checked ? 'はい' : 'いいえ'],
             ['集計開始日', getElement('from').value || '指定なし'],
             ['集計終了日', getElement('to').value || '指定なし'],
             ['ステータス', getElement('status').value || 'すべて'],
@@ -2393,6 +2527,24 @@ class OperationsApp
     {
         getElement('cdn').textContent = 'グラフライブラリを読み込めません。ネットワークとCDNへの接続を確認してください。CSV取込・集計表は利用できます。';
         this.render();
+    }
+
+    /**
+     * 両方の番号一覧を一括選択する。確定は「反映」ボタンで行う。
+     * @param {boolean} checked trueで全ON、falseで全OFF。
+     * @returns {void} 未反映の表示を更新する。
+     */
+    setAllNumbers(checked)
+    {
+        for (const field of ['routine', 'issue'])
+        {
+            for (const input of getElement(field + 'Choices').querySelectorAll('input'))
+            {
+                input.checked = checked;
+            }
+        }
+
+        this.markNumberFiltersPending();
     }
 
     /**
