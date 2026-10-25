@@ -2107,6 +2107,8 @@ class OperationsApp
 
         // 基準日は保存値を使用せず、起動時の今日を設定する。
         getElement('asof').value = todayInputValue();
+        // 起動時はON。以後はユーザーの切替を維持する。
+        getElement('usePlannedForWorking').checked = true;
 
         try
         {
