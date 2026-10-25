@@ -44,6 +44,7 @@ const COLORS = Object.freeze([
 
 /** 期間・集計キーと画面上の見出しの対応。 */
 const PERIOD_LABELS = Object.freeze({
+    cumulative: '累積工数と予算消化ガイド',
     all: '全期間',
     quarter: 'クオーター毎',
     week: '週次',
@@ -700,6 +701,123 @@ class CsvService
 class AnalysisService
 {
     /**
+     * 計画期間の日末累積工数と、暦日で均等配分した予算ガイドを作る。
+     * @param {Task[]} rows 絞り込み・工数切替を適用済みの作業。
+     * @param {PlanningConditions} planning 計画期間・基準日・予算。
+     * @returns {{buckets:Object[],model:ChartModel}} 日付と描画・CSV用データ。
+     * @throws {Error} 計画日付が不正、または期間が長すぎる場合。
+     */
+    static cumulativeChart(rows, planning)
+    {
+        const { start, end, asof, budget } = planning;
+
+        // 未入力・不正な日付・開始終了の逆転を検出する。
+        if (![start, end, asof].every(Number.isFinite) || start > end)
+        {
+            throw Error(
+                '累積工数を表示するには、正しい計画開始日・終了日・基準日を指定してください。'
+            );
+        }
+
+        const days = (end - start) / CONFIG.millisecondsPerDay + 1;
+        if (days > CONFIG.maxSpanDays)
+        {
+            throw Error(
+                '累積工数の計画期間は' +
+                CONFIG.maxSpanDays +
+                '日以内にしてください。'
+            );
+        }
+
+        const hasBudget = Number.isFinite(budget) && budget > 0;
+        const daily = new Map();
+
+        // 計画期間内の工数を着手開始予定日ごとに合計する。
+        for (const task of rows)
+        {
+            if (task.date !== null &&
+                task.date >= start &&
+                task.date <= end)
+            {
+                daily.set(
+                    task.date,
+                    (daily.get(task.date) || 0) + task.actual
+                );
+            }
+        }
+
+        const buckets = [];
+        const model = {
+            chartType: 'line',
+            unit: '時間',
+            stacked: false,
+            series: [
+                {
+                    label: '累積工数',
+                    color: COLORS[0]
+                }
+            ],
+            values: [],
+            headers: ['日付', '累積工数(h)'],
+            tableRows: [],
+            description:
+                '着手開始予定日基準の日末累積。実績線は基準日まで。' +
+                '集計条件・工数切替を適用。' +
+                (hasBudget ?
+                    ' 破線は期間予算を暦日で均等配分した目安' +
+                    '（開始日は1日分、終了日は予算全額）。' :
+                    ' 正の期間予算を入力するとガイドを表示します。')
+        };
+
+        // 予算未入力の場合は累積工数だけを表示する。
+        if (hasBudget)
+        {
+            model.series.push({
+                label: '予算消化ガイド',
+                color: '#d08017',
+                dashed: true
+            });
+            model.headers.push('予算消化ガイド(h)');
+        }
+
+        let cumulative = 0;
+
+        // 作業のない日も含め、計画開始日から終了日まで生成する。
+        for (let index = 0; index < days; index++)
+        {
+            const date = start + index * CONFIG.millisecondsPerDay;
+            const label = formatDate(date);
+
+            cumulative += daily.get(date) || 0;
+
+            // 基準日より後の実績はnullにし、線を描かない。
+            const actual = date <= asof ?
+                cumulative / CONFIG.effortScale :
+                null;
+
+            const values = [actual];
+            const tableRow = [
+                label,
+                actual === null ? '' : formatNumber(actual)
+            ];
+
+            // 既存KPIと同じ日末基準で、終了日に予算全額へ到達する。
+            if (hasBudget)
+            {
+                const guide = budget * (index + 1) / days;
+                values.push(guide);
+                tableRow.push(formatNumber(guide));
+            }
+
+            buckets.push({ label });
+            model.values.push(values);
+            model.tableRows.push(tableRow);
+        }
+
+        return { buckets, model };
+    }
+
+    /**
      * 作業一覧の実績・予定・件数を合計する。
      * @param {Task[]} rows 作業一覧。
      * @returns {Totals} 合計。空配列ならすべて0。
@@ -1208,6 +1326,8 @@ class GraphRenderer
      */
     draw(container, buckets, model, period)
     {
+        const isLine = model.chartType === 'line';
+
         if (typeof window.Chart !== 'function')
         {
             container.innerHTML = '<div class="empty">グラフを読み込めません。CDNへの接続を確認して再読込してください。下の集計表は利用できます。</div>';
@@ -1221,7 +1341,10 @@ class GraphRenderer
 
         const canvas = document.createElement('canvas');
         canvas.setAttribute('role', 'img');
-        canvas.setAttribute('aria-label', `棒グラフ（${model.unit}）。数値は下の集計表で確認できます。`);
+        canvas.setAttribute(
+            'aria-label',
+            `${isLine ? '線' : '棒'}グラフ（${model.unit}）。数値は下の集計表で確認できます。`
+        );
         container.replaceChildren(canvas);
 
         // カテゴリ軸に実際の期間名を渡す。仮日付と日付ライブラリは不要。
@@ -1247,9 +1370,19 @@ class GraphRenderer
                 data: values,
                 backgroundColor: series.color,
                 borderColor: series.color,
-                borderWidth: 1,
+                borderWidth: isLine ? 2 : 1,
 
-                // 固定幅は指定せず、期間数と表示幅から自動計算する。
+                // 線グラフの場合だけ適用する設定。
+                ...(isLine ? {
+                    borderDash: series.dashed ? [6, 4] : [],
+                    pointRadius: buckets.length === 1 ? 3 : 0,
+                    pointHitRadius: 8,
+                    spanGaps: false,
+                    tension: 0,
+                    fill: false
+                } : {}),
+
+                // 棒グラフの幅設定。
                 maxBarThickness: 64,
                 categoryPercentage: 0.8,
                 barPercentage: 0.8
@@ -1278,7 +1411,7 @@ class GraphRenderer
                     type: 'category',
                     position: 'bottom',
                     stacked: model.stacked,
-                    offset: true,
+                    offset: !isLine,
                     grid: {
                         display: false
                     },
@@ -1291,8 +1424,8 @@ class GraphRenderer
                         mirror: false,
                         labelOffset: 0,
 
-                        // 日次のみ自動で間引き、それ以外は全項目を表示する。
-                        autoSkip: period === 'day',
+                        // 日次と累積線グラフは横軸ラベルを自動で間引く。
+                        autoSkip: period === 'day' || isLine,
                         autoSkipPadding: 4,
                         color: '#526780',
                         font: { size: 13 }
@@ -1333,7 +1466,7 @@ class GraphRenderer
         try
         {
             this.graphs.push(new window.Chart(canvas, {
-                type: 'bar',
+                type: isLine ? 'line' : 'bar',
                 data: {
                     labels,
                     datasets
@@ -1542,6 +1675,11 @@ class DashboardView
     {
         // 集計方法に応じた横軸の説明を設定する。
         let description = '横軸：着手予定日';
+
+        if (period === 'cumulative')
+        {
+            description = escapeHtml(model.description);
+        }
         if (period === 'quarter')
         {
             description = '実施時期の値ごとに集計';
@@ -2273,9 +2411,59 @@ class OperationsApp
             `${this.fileLabel} ｜ 読込 ${this.data.length.toLocaleString()}件 ／ この表示 ${rows.length.toLocaleString()}件 ｜ 日次・週次：着手予定日基準` :
             'データ未読込';
         getElement('export').disabled = !rows.length;
+
+        // データ0件でも計画期間全体のガイドを確認できるよう、
+        // 空表示の判定より前に累積グラフを描画する。
+        if (this.activeTab === 'types')
+        {
+            try
+            {
+                const { buckets, model } = AnalysisService.cumulativeChart(
+                    rows,
+                    this.readPlanning()
+                );
+
+                const container = DashboardView.appendChartPanel(
+                    'cumulative',
+                    buckets,
+                    model
+                );
+
+                this.graphRenderer.draw(
+                    container,
+                    buckets,
+                    model,
+                    'cumulative'
+                );
+
+                // タブ全体のCSVにも累積工数とガイドを含める。
+                this.exportRows.push(
+                    [PERIOD_LABELS.cumulative],
+                    model.headers,
+                    ...model.tableRows,
+                    []
+                );
+
+                getElement('export').disabled = false;
+            }
+            catch (error)
+            {
+                // 計画条件が未入力でも、既存の番号別・期間別グラフは表示する。
+                const notice = document.createElement('p');
+                notice.className = 'notice warn';
+                notice.textContent = error.message;
+                getElement('charts').appendChild(notice);
+            }
+        }
+
         if (!rows.length)
         {
-            DashboardView.renderEmpty(this.data.length > 0);
+            // 種類タブでは、上で描画した累積グラフや案内を残す。
+            if (this.activeTab !== 'types')
+            {
+                DashboardView.renderEmpty(this.data.length > 0);
+            }
+
             return;
         }
 
@@ -2478,6 +2666,10 @@ class OperationsApp
     {
         const rows = [
             ['元ファイル', this.fileLabel],
+            ['計画開始日', getElement('planStart').value],
+            ['計画終了日', getElement('planEnd').value],
+            ['消化状況の基準日', getElement('asof').value],
+            ['期間予算(h)', getElement('budget').value],
             ['作業中は申請工数で集計', getElement('usePlannedForWorking').checked ? 'はい' : 'いいえ'],
             ['集計開始日', getElement('from').value || '指定なし'],
             ['集計終了日', getElement('to').value || '指定なし'],
