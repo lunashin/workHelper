@@ -746,6 +746,14 @@ class AnalysisService
             }
         }
 
+        // KPIと同じ平均消化ペースで、基準日から期末までを予測する。
+        const metrics = AnalysisService.budgetMetrics(rows, planning);
+        const hasForecast = metrics.forecast !== null;
+        const forecastStart = Math.min(asof, end);
+        const dailyPace = hasForecast ?
+            metrics.actual / metrics.elapsed :
+            0;
+
         const buckets = [];
         const model = {
             chartType: 'line',
@@ -780,6 +788,29 @@ class AnalysisService
             model.headers.push('予算消化ガイド(h)');
         }
 
+        // 予算の入力有無にかかわらず、経過日があれば予測を表示する。
+        if (hasForecast)
+        {
+            model.series.push({
+                label: '予想実績ガイド（期末 ' +
+                    formatNumber(metrics.forecast) + ' h）',
+                color: '#8455bb',
+                dashed: true,
+                showEndpoint: true
+            });
+
+            model.headers.push('予想実績ガイド(h)');
+
+            model.description +=
+                ' 紫の破線は基準日までの平均消化ペースによる予測。期末見込 ' +
+                formatNumber(metrics.forecast) + ' h。';
+        }
+        else
+        {
+            model.description +=
+                ' 基準日が計画開始日前のため、予想実績ガイドは表示しません。';
+        }
+
         let cumulative = 0;
 
         // 作業のない日も含め、計画開始日から終了日まで生成する。
@@ -807,6 +838,22 @@ class AnalysisService
                 const guide = budget * (index + 1) / days;
                 values.push(guide);
                 tableRow.push(formatNumber(guide));
+            }
+
+            if (hasForecast)
+            {
+                // 基準日より前は描画せず、実績線の末尾から予測をつなぐ。
+                // 最終日はKPIの期末見込を直接使用して数値を一致させる。
+                const forecast = date < forecastStart ?
+                    null :
+                    date === end ?
+                        metrics.forecast :
+                        dailyPace * (index + 1);
+
+                values.push(forecast);
+                tableRow.push(
+                    forecast === null ? '' : formatNumber(forecast)
+                );
             }
 
             buckets.push({ label });
@@ -1375,7 +1422,11 @@ class GraphRenderer
                 // 線グラフの場合だけ適用する設定。
                 ...(isLine ? {
                     borderDash: series.dashed ? [6, 4] : [],
-                    pointRadius: buckets.length === 1 ? 3 : 0,
+                    // 予想実績ガイドは計画終了日の点を強調する。
+                    pointRadius: series.showEndpoint ?
+                        values.map((value, index) =>
+                            value !== null && index === values.length - 1 ? 4 : 0) :
+                        buckets.length === 1 ? 3 : 0,
                     pointHitRadius: 8,
                     spanGaps: false,
                     tension: 0,
