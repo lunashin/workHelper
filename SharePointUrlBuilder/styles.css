@@ -361,9 +361,11 @@ footer {
   }
 }
 
-/* 履歴の行操作：条件復元と個別削除を横並びにする。 */
+/* 履歴の行操作：コピー・開く・復元・削除。幅が足りない場合は折り返す。 */
 .history-actions {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 260px;
   align-items: center;
   gap: 8px;
 }

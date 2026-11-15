@@ -571,7 +571,7 @@
   }
 
   /**
-   * 履歴を新しい順に描画し、各行へ条件復元・個別削除ボタンを配置する。
+   * 履歴を新しい順に描画し、各行へコピー・開く・条件復元・個別削除ボタンを配置する。
    *
    * @returns {void}
    */
@@ -611,6 +611,12 @@
       // 履歴の状態を複製して復元し、現在の設定でURLを再生成する。
       const actions = document.createElement('div');
       actions.className = 'history-actions';
+
+      // 保存当時のURLをそのまま操作する。現在の選択条件は変更しない。
+      actions.append(
+        button('URLをコピー', () => copyURL(h.url, h.state)),
+        button('URLを開く', () => openURL(h.url, h.state))
+      );
       actions.append(button('条件を復元', () => {
         data.current = clone(h.state);
         save();
@@ -732,10 +738,15 @@
     renderHistory();
   }
 
-  // コピー操作：非同期処理の開始時点で条件を複製し、履歴とのずれを防ぐ。
-  $('copy').addEventListener('click', async () => {
-    const state = clone(data.current),
-      url = buildURL(state);
+  /**
+   * 指定URLをコピーし、成功した操作を履歴へ記録する。
+   * @param {string} url - 生成URLまたは履歴に保存されたURL。
+   * @param {Object} sourceState - 対象URLの選択条件。
+   * @returns {Promise<void>} コピー処理完了時に解決する。
+   */
+  async function copyURL(url, sourceState) {
+    // 非同期コピー中に画面の条件が変わっても、操作開始時の条件を記録する。
+    const state = clone(sourceState);
     try {
       try {
         if (!navigator.clipboard?.writeText) {
@@ -743,33 +754,37 @@
         }
         await navigator.clipboard.writeText(url);
       } catch (_) {
-
-        // Clipboard APIが使えない環境では一時textareaでコピーを試みる。
+        // Clipboard APIが利用できない場合は一時textareaでコピーを試みる。
         const temporary = document.createElement('textarea');
         temporary.value = url;
         document.body.append(temporary);
-        temporary.select();
-        const copied = document.execCommand('copy');
-        temporary.remove();
-        if (!copied) {
-          throw new Error();
+        try {
+          temporary.select();
+          if (!document.execCommand('copy')) {
+            throw new Error();
+          }
+        } finally {
+          temporary.remove();
         }
       }
 
-      // コピー成功後だけ履歴を追加する。
       record('copy', url, state);
       notify('URLをコピーしました。');
     } catch (_) {
-      $('url').focus();
-      $('url').select();
-      notify('自動コピーできません。選択されたURLを Ctrl+C でコピーしてください（履歴には未記録）。');
+      // 履歴URLと現在の生成URLが異なる場合も、正しい対象を手動コピーできる。
+      window.prompt('自動コピーできません。以下のURLを Ctrl+C でコピーしてください。', url);
+      notify('自動コピーできませんでした（履歴には未記録）。');
     }
-  });
+  }
 
-  // 開く操作：ポップアップの生成を確認してからURLを渡す。接続結果は判定しない。
-  $('open').addEventListener('click', () => {
-    const state = clone(data.current),
-      url = buildURL(state);
+  /**
+   * 指定URLを別タブで開き、URL引き渡しに成功した操作を履歴へ記録する。
+   * @param {string} url - 生成URLまたは履歴に保存されたURL。
+   * @param {Object} sourceState - 対象URLの選択条件。
+   * @returns {void}
+   */
+  function openURL(url, sourceState) {
+    const state = clone(sourceState);
     const tab = window.open('about:blank', '_blank');
     if (!tab) {
       notify('別タブを開けませんでした。Edgeのポップアップ設定を確認してください。');
@@ -786,7 +801,11 @@
       tab.close();
       notify('URLを開けませんでした。');
     }
-  });
+  }
+
+  // 生成URLのボタンと履歴のボタンで同じ操作処理を使用する。
+  $('copy').addEventListener('click', () => copyURL(buildURL(data.current), data.current));
+  $('open').addEventListener('click', () => openURL(buildURL(data.current), data.current));
 
   /**
    * Enterで現在の生成URLを開く。既存のクリック処理を共用する。
