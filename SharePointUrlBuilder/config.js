@@ -13,8 +13,9 @@ window.SP_URL_CONFIG = {
   ],
   filters: [
     { key: 'group', name: '担当グループ', id: 'ResponsibleGroup', options: [
-      { name: 'グループA', id: 'GroupA' }, 
-      { name: 'グループB', id: 'GroupB' }
+      { name: 'グループA', id: 'GroupA', departmentId: 'quality' }, 
+      { name: 'グループB', id: 'GroupB', departmentId: 'design' },
+      { name: 'グループC', id: 'GroupC', departmentId: 'production' }
     ] },
     { key: 'law', name: '項目番号', id: 'RegulationNo', options: [
       { name: '項目001', id: '001' }, 

@@ -161,10 +161,63 @@
   // 不正な設定では操作を停止し、原因を通知する。
   try {
     validateConfig();
+    validateDepartmentGroups();
   } catch (error) {
     notify('設定エラー：' + error.message);
     document.querySelectorAll('button').forEach(b => b.disabled = true);
     return;
+  }
+
+  /**
+   * グループ側に定義した所属部門IDを検証する。
+   * @returns {void}
+   * @throws {Error} departmentIdが未指定、または未定義の部門IDの場合。
+   */
+  function validateDepartmentGroups() {
+    const group = config.filters.find(f => f.key === 'group');
+    if (!group) {
+      fail('担当グループの設定（key: group）が必要です。');
+    }
+
+    const departmentIds = new Set(config.departments.map(d => d.id));
+    for (const option of group.options) {
+      if (typeof option.departmentId !== 'string' || !departmentIds.has(option.departmentId)) {
+        fail('担当グループ「' + option.name + '」のdepartmentIdに、所属部門のIDを指定してください。');
+      }
+    }
+  }
+
+  /**
+   * グループ側の所属部門IDで候補を絞り込む。他の属性は全候補を返す。
+   * @param {Object} attribute - 属性の設定。
+   * @param {string} departmentId - 選択中の部門ID。
+   * @returns {Array<Object>} optionsの定義順を維持した候補一覧。
+   */
+  function getOptions(attribute, departmentId) {
+    if (attribute.key !== 'group') {
+      return attribute.options;
+    }
+    return attribute.options.filter(option => option.departmentId === departmentId);
+  }
+
+  /**
+   * 部門に存在しない担当グループを指定なしへ戻す。
+   * @param {Object} state - 更新対象の選択状態。
+   * @param {boolean} [resetCustom=false] - 部門変更時は直接入力値も照合する。
+   * @returns {boolean} 選択を解除した場合true。
+   */
+  function normalizeGroup(state, resetCustom = false) {
+    const group = config.filters.find(f => f.key === 'group');
+    const selected = group && state.filters[group.key];
+    if (!selected || selected.mode === 'none' ||
+        (selected.mode === 'custom' && !resetCustom)) {
+      return false;
+    }
+    if (getOptions(group, state.department).some(o => o.id === selected.value)) {
+      return false;
+    }
+    state.filters[group.key] = { mode: 'none', value: '' };
+    return true;
   }
 
   /**
@@ -381,6 +434,11 @@
    * @returns {void}
    */
   function renderColumns() {
+    // 設定変更後の再読込・履歴復元・インポートでも所属外の候補を残さない。
+    if (normalizeGroup(data.current)) {
+      save();
+      notify('選択部門の候補にない担当グループを「指定なし」に戻しました。');
+    }
     $('columns').replaceChildren();
 
     // 配列の順番が左から右への表示順となる。先頭2列だけが必須。
@@ -423,7 +481,13 @@
             mode,
             value
           };
-        } else data.current[f.key] = value;
+        } else {
+          const previous = data.current[f.key];
+          data.current[f.key] = value;
+          if (f.key === 'department' && previous !== value && normalizeGroup(data.current, true)) {
+            notify('部門を変更したため、担当グループを「指定なし」に戻しました。');
+          }
+        }
         save();
         renderColumns();
         updateURL();
@@ -434,7 +498,7 @@
         choices.append(button('指定なし', () => set('', 'none'), current.mode ===
           'none'));
       }
-      for (const o of f.options) {
+      for (const o of getOptions(f, data.current.department)) {
         choices.append(button(o.name, () => set(o.id, 'preset'),
           filter ? current.mode === 'preset' && current.value === o.id : data.current[f
             .key] === o.id));
