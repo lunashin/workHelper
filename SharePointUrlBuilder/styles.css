@@ -1,0 +1,387 @@
+/* 共通スタイル：フォント、文字色、ページ背景。CSSカスタムプロパティは使用しない。 */
+:root {
+  font-family: "Segoe UI", "Yu Gothic UI", Meiryo, sans-serif;
+  color: #18343b;
+  background: #f3f6f7;
+  font-size: 14px;
+}
+
+/* 共通ボックスモデル：幅・高さにpaddingとborderを含める。 */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+/* ヘッダー：タイトルとローカル動作バッジを横並びにする。 */
+header {
+  padding: 32px 4vw 26px;
+  background: #123c45;
+  color: white;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+h1 {
+  font-size: 28px;
+  margin: 8px 0;
+}
+
+header p {
+  margin: 6px 0;
+  color: #c0d5d8;
+}
+
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 2px;
+}
+
+/* 共通バッジ：ヘッダーとビュー名の補足表示に使用する。 */
+.badge {
+  font-size: 12px;
+  border: 1px solid #87aaa64d;
+  border-radius: 20px;
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+
+/* メイン領域：広い画面でも内容の横幅を制限する。 */
+main {
+  max-width: 1800px;
+  margin: auto;
+  padding: 20px 4vw;
+}
+
+/* 共通ボタン：通常、ホバー、フォーカス、無効状態。 */
+button {
+  font: inherit;
+  border: 1px solid #c9d7da;
+  background: white;
+  border-radius: 7px;
+  color: #24464e;
+  padding: 9px 13px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #eaf3f2;
+  border-color: #6a9896;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #d18c2d;
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+/* 共通レイアウト：操作バー、セクション見出し、URL操作の左右配置。 */
+.toolbar,
+.section-heading,
+/* URL下部の要約とコピー／開くボタン。 */
+.result-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.toolbar {
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.toolbar>span {
+  overflow-wrap: anywhere;
+}
+
+.toolbar button {
+  font-size: 12px;
+}
+
+/* セクション共通：アクセス条件・URL・履歴をカード形式にする。 */
+section {
+  background: white;
+  border: 1px solid #dbe5e7;
+  border-radius: 12px;
+  padding: 22px;
+  margin: 18px 0;
+}
+
+h2 {
+  font-size: 14px;
+  color: #43877f;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+h2 span {
+  font-size: 18px;
+  color: #18343b;
+}
+
+small {
+  font-weight: normal;
+  color: #647b81;
+}
+
+.hint {
+  font-size: 12px;
+  color: #677d83;
+  line-height: 1.7;
+}
+
+/* 条件選択：6属性群を横に並べ、各群の候補は縦に並べる。 */
+.columns {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(155px, 1fr));
+  gap: 12px;
+  overflow-x: auto;
+  padding: 10px 3px;
+}
+
+.column {
+  padding: 13px;
+  background: #f7f9fa;
+  border: 1px solid #e2e9eb;
+  border-radius: 9px;
+  min-width: 0;
+}
+
+.column h3 {
+  font-size: 14px;
+  margin: 0 0 14px;
+}
+
+.step {
+  color: #789197;
+  font-size: 11px;
+  display: block;
+  margin-bottom: 5px;
+}
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.choices button {
+  text-align: left;
+  overflow-wrap: anywhere;
+  min-height: 41px;
+}
+
+/* 選択中の候補：app.jsが更新するaria-pressedと見た目を連動させる。 */
+.choices button[aria-pressed=true] {
+  background: #e0f0eb;
+  border-color: #277e6e;
+  color: #155d4e;
+  font-weight: 600;
+  box-shadow: inset 3px 0 #277e6e;
+}
+
+/* 任意フィルタの直接入力欄。 */
+.custom-label {
+  display: block;
+  font-size: 12px;
+  margin: 14px 0 6px;
+  color: #647b81;
+}
+
+.column input {
+  width: 100%;
+  padding: 9px 8px;
+  border: 1px solid #bbcdd0;
+  border-radius: 6px;
+  font: inherit;
+}
+
+/* エンコード方式のラジオボタンとグループ見出し。 */
+.encoding {
+  display: flex;
+  gap: 18px;
+  border: 0;
+  padding: 10px 0;
+  margin: 10px 0;
+}
+
+.encoding legend {
+  font-size: 12px;
+  color: #677d83;
+  padding-top: 12px;
+}
+
+.encoding input {
+  accent-color: #197867;
+}
+
+/* 生成URL：長い文字列の表示と縦方向のリサイズに対応する。 */
+textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 15px;
+  background: #f4f7f8;
+  border: 1px solid #cfdddf;
+  border-radius: 8px;
+  color: #24464e;
+  font: 13px/1.8 Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.result-footer {
+  margin-top: 14px;
+}
+
+.result-footer>span {
+  font-size: 12px;
+  color: #647b81;
+}
+
+/* 主要操作：URLを開くボタンを強調する。 */
+.primary {
+  background: #197867;
+  color: white;
+  border-color: #197867;
+}
+
+.primary:hover {
+  background: #125f52;
+  color: white;
+}
+
+/* 警告と通常の操作メッセージ。警告の表示切替はHTMLのhidden属性で行う。 */
+.warning {
+  background: #fff4dc;
+  color: #85581b;
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+#message {
+  min-height: 18px;
+  color: #176857;
+  margin: 12px 0;
+}
+
+/* 履歴一覧：日時、条件とURL、復元ボタンの3列構成。 */
+.history-item {
+  display: grid;
+  grid-template-columns: 150px 1fr auto;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid #e5ecee;
+  align-items: center;
+}
+
+.history-item p {
+  margin: 5px 0;
+  font-size: 12px;
+  color: #647b81;
+  overflow-wrap: anywhere;
+}
+
+.history-item code {
+  display: block;
+  font-size: 11px;
+  color: #7a8e93;
+  overflow-wrap: anywhere;
+}
+
+/* 履歴が0件の場合の案内。 */
+.empty {
+  padding: 30px;
+  text-align: center;
+  color: #81969b;
+  border: 1px dashed #ccdadc;
+  border-radius: 8px;
+}
+
+/* 読み上げ用ラベル：画面表示から隠すが支援技術からは参照可能にする。 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+/* フッター：設定ファイルの案内。 */
+footer {
+  text-align: center;
+  font-size: 11px;
+  color: #84969b;
+  padding: 12px 0 30px;
+}
+
+/* 幅700px以下：ヘッダーと履歴を縦配置にし、条件列は横スクロールで保つ。 */
+@media(max-width:700px) {
+  header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  h1 {
+    font-size: 24px;
+  }
+
+  section {
+    padding: 15px;
+  }
+
+  .result-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .history-item {
+    grid-template-columns: 1fr;
+  }
+
+  .section-heading {
+    flex-wrap: wrap;
+  }
+
+  .columns {
+    grid-template-columns: repeat(6, 180px);
+  }
+}
+
+/* 履歴の行操作：条件復元と個別削除を横並びにする。 */
+.history-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-delete {
+  color: #a33d3d;
+  min-width: 40px;
+}
+
+.history-delete:hover {
+  color: #852c2c;
+  background: #fff0f0;
+  border-color: #d99b9b;
+}
+
+/* 削除中の行：縮小時に内容をはみ出させず、二重操作も防ぐ。 */
+.history-item.history-removing {
+  overflow: hidden;
+  min-height: 0;
+  pointer-events: none;
+}

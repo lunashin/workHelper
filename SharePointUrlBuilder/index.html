@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+
+<!-- 要素IDはapp.jsから参照するため、変更する場合は両ファイルを合わせて修正する。 -->
+<html lang="ja">
+  <head>
+
+    <!-- 文字コードと表示領域。日本語設定ファイルはUTF-8で保存する。 -->
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1" name="viewport"/>
+
+    <!-- 通信制限：外部接続は拒否し、同じ場所に置いたJS/CSSだけを読み込む。 -->
+    <meta content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" http-equiv="Content-Security-Policy"/>
+    <title>SharePoint URLビルダー</title>
+    <link href="styles.css" rel="stylesheet"/>
+
+    <!-- deferでDOM構築後に順番通り実行する。config.jsを必ずapp.jsより先に置く。 -->
+    <script defer="" src="config.js"></script>
+    <script defer="" src="app.js"></script>
+  </head>
+  <body>
+
+    <main>
+
+      <!-- 共通操作：ベースURLの表示、保存データのエクスポート／インポート。 -->
+      <div class="toolbar">
+        <span id="baseLabel"></span>
+        <div>
+          <button id="export">設定・履歴をエクスポート</button>
+          <button id="import">インポート</button>
+          <input accept=".json,application/json" hidden="" id="file" type="file"/>
+        </div>
+      </div>
+
+      <!-- 通知領域：保存障害はstorageWarning、操作結果はmessageへapp.jsから表示する。 -->
+      <p class="warning" hidden="" id="storageWarning"></p>
+      <p aria-live="polite" id="message" role="status"></p>
+
+      <!-- 01 アクセス条件：columns配下の6列はapp.jsのrenderColumns()が生成する。 -->
+      <section aria-labelledby="selectionTitle">
+        <div class="section-heading">
+          <h2 id="selectionTitle">
+            01
+            <span>アクセス条件</span>
+          </h2>
+          <button id="reset">条件をリセット</button>
+        </div>
+        <p class="hint">左から右へ選択。フィルタは候補から選ぶか、値を直接入力できます。</p>
+        <div class="columns" id="columns"></div>
+      </section>
+
+      <!-- 02 生成結果：URLは読み取り専用。エンコード方式と操作ボタンを配置する。 -->
+      <section aria-labelledby="resultTitle" class="result">
+        <div class="section-heading">
+          <h2 id="resultTitle">
+            02
+            <span>生成URL</span>
+          </h2>
+          <span class="badge">ビュー：全てのアイテム</span>
+        </div>
+
+        <!-- ラジオボタンのnameとvalueはapp.jsのイベント処理で参照する。 -->
+        <fieldset class="encoding">
+          <legend>クエリ文字列のURLエンコード</legend>
+          <label>
+            <input checked="" name="encoding" type="radio" value="yes"/>
+            あり（推奨）
+          </label>
+          <label>
+            <input name="encoding" type="radio" value="no"/>
+            なし
+          </label>
+        </fieldset>
+        <label class="sr-only" for="url">生成されたURL</label>
+        <textarea id="url" readonly="" rows="3" spellcheck="false"></textarea>
+        <p class="warning" hidden="" id="urlWarning"></p>
+        <div class="result-footer">
+          <span id="summary"></span>
+          <div>
+            <button id="copy">URLをコピー</button>
+            <button class="primary" id="open">URLを開く ↗</button>
+          </div>
+        </div>
+        <p class="hint">EnterキーでもURLを開けます（日本語変換中・ほかのボタン操作中を除く）。開く操作時のみ、別タブからSharePointへアクセスします。</p>
+      </section>
+
+      <!-- 03 履歴：history配下はrenderHistory()で再描画。復元ボタンもJS側で生成する。 -->
+      <section aria-labelledby="historyTitle">
+        <div class="section-heading">
+          <h2 id="historyTitle">
+            03
+            <span>URL生成履歴</span>
+            <small id="historyCount"></small>
+          </h2>
+          <button id="clear">履歴を全削除</button>
+        </div>
+        <p class="hint">コピー・開く操作を記録します（最新200件）。「条件を復元」で再編集できます。</p>
+        <div id="history"></div>
+      </section>
+    </main>
+
+    <!-- フッター：環境固有の設定を変更するファイルを案内する。 -->
+    <footer>SharePoint URL Builder · 設定の変更は config.js から</footer>
+  </body>
+</html>
