@@ -142,10 +142,11 @@ small {
   line-height: 1.7;
 }
 
-/* 条件選択：6属性群を横に並べ、各群の候補は縦に並べる。 */
+/* 条件選択：設定数に応じた属性群を横に並べ、各群の候補は縦に並べる。 */
 .columns {
   display: grid;
-  grid-template-columns: repeat(6, minmax(155px, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(155px, 1fr);
   gap: 12px;
   overflow-x: auto;
   padding: 10px 3px;
@@ -357,7 +358,7 @@ footer {
   }
 
   .columns {
-    grid-template-columns: repeat(6, 180px);
+    grid-auto-columns: 180px;
   }
 }
 
