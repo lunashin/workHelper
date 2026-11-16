@@ -2,6 +2,7 @@
 window.SP_URL_CONFIG = {
   baseUrls: [{ name: '業務システム（サンプル）', id: 'https://sharepoint.example.local' }],
   departments: [
+    { name: 'TOP', id: '' },
     { name: '品質部', id: 'quality' },
     { name: '設計部', id: 'design' },
     { name: '生産部', id: 'production' }

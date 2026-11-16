@@ -121,15 +121,18 @@
       const ids = new Set();
       for (const item of items) {
         text(item.name);
-        path(item.id);
+        // TOPサイトを表す空IDは部門だけに許可する。重複チェックは空IDにも適用。
+        if (!(items === config.departments && item.id === '')) {
+          path(item.id);
+        }
         if (ids.has(item.id)) {
           fail('設定IDが重複しています。');
         }
         ids.add(item.id);
       }
     }
-    if (!Array.isArray(config.filters) || config.filters.length !== 4) {
-      fail('4つのフィルタを設定してください。');
+    if (!Array.isArray(config.filters)) {
+      fail('filtersを配列で設定してください（0件でも構いません）。');
     }
 
     // フィルタは保存キーとSharePoint列内部名の両方を一意にする。
@@ -176,7 +179,8 @@
   function validateDepartmentGroups() {
     const group = config.filters.find(f => f.key === 'group');
     if (!group) {
-      fail('担当グループの設定（key: group）が必要です。');
+      // 担当グループ自体を定義しない構成も許可する。
+      return;
     }
 
     const departmentIds = new Set(config.departments.map(d => d.id));
@@ -261,7 +265,11 @@
       filters: {}
     };
     for (const f of config.filters) {
-      const v = value.filters[f.key];
+      // 設定に追加したフィルタは、旧保存データに存在しなければ指定なしで補完。
+      // 設定から削除したフィルタは、この再構築の対象外となる。
+      const v = Object.prototype.hasOwnProperty.call(value.filters, f.key)
+        ? value.filters[f.key]
+        : { mode: 'none', value: '' };
       if (!isObject(v) || !['none', 'preset', 'custom'].includes(v.mode)) {
         fail('フィルタの形式が不正です。');
       }
@@ -365,7 +373,9 @@
    */
   function buildURL(state) {
     const base = new URL(config.baseUrls[0].id).href.replace(/\/+$/, '');
-    const target = base + '/' + path(state.department) + '/' + path(state.listType) +
+    // 空の部門IDでは階層自体を省略し、余分なスラッシュを挿入しない。
+    const departmentPath = state.department === '' ? '' : '/' + path(state.department);
+    const target = base + departmentPath + '/' + path(state.listType) +
       '/AllItems.aspx';
 
     // クエリの組と連番カウンタ。未指定の条件には番号を割り当てない。
@@ -429,7 +439,7 @@
   }
 
   /**
-   * 6つの属性列を現在の選択状態から再描画し、入力イベントを登録する。
+   * 設定数に応じた属性列を現在の選択状態から再描画し、入力イベントを登録する。
    *
    * @returns {void}
    */
