@@ -97,6 +97,85 @@
   }
 
   /**
+   * 独立したgroups設定を画面・URL処理で扱う共通属性形式へ変換する。
+   * @returns {Object} 担当グループ属性。保存先はstate.group。
+   */
+  function groupAttribute() {
+    if (!isObject(config.groups)) {
+      fail('groupsに担当グループの設定を定義してください。');
+    }
+    return { ...config.groups, key: 'group' };
+  }
+
+  /**
+   * リストの所属部門・使用可能フィルタの参照を検証する。
+   * @returns {void}
+   */
+  function validateListRelations() {
+    const departments = new Set(config.departments.map(d => d.id));
+    const filters = new Set(config.filters.map(f => f.key));
+    for (const list of config.listTypes) {
+      for (const [field, valid] of [['departmentIds', departments], ['filterKeys', filters]]) {
+        const values = list[field];
+        if (!Array.isArray(values) || new Set(values).size !== values.length ||
+            values.some(value => !valid.has(value))) {
+          fail('リスト「' + list.name + '」の' + field + 'を確認してください。');
+        }
+      }
+    }
+  }
+
+  /** @param {string} departmentId - 部門ID。 @returns {Array<Object>} 所属リストの候補。 */
+  function getLists(departmentId) {
+    return config.listTypes.filter(list => list.departmentIds.includes(departmentId));
+  }
+
+  /** @param {Object} state - 選択状態。 @returns {Array<Object>} 現在のリストで有効な一般フィルタ。 */
+  function activeFilters(state) {
+    const list = getLists(state.department).find(item => item.id === state.listType);
+    return list ? list.filterKeys.map(key => config.filters.find(f => f.key === key)) : [];
+  }
+
+  /** @param {Object} state - 選択状態。 @returns {Array<Object>} URLに使うグループと有効フィルタ。 */
+  function queryAttributes(state) {
+    return [groupAttribute(), ...activeFilters(state)];
+  }
+
+  /** @param {Object} state - 選択状態。 @param {string} key - 属性キー。 @returns {Object} 選択値。 */
+  function selection(state, key) {
+    return key === 'group' ? state.group : state.filters[key];
+  }
+
+  /** @param {Object} state - 更新対象。 @param {string} key - 属性キー。 @param {Object} value - 選択値。 @returns {void} */
+  function setSelection(state, key, value) {
+    if (key === 'group') {
+      state.group = value;
+    } else {
+      state.filters[key] = value;
+    }
+  }
+
+  /**
+   * 部門・リストの連動を正規化する。使用不可になった条件は指定なしへ戻す。
+   * @param {Object} state - 更新対象の選択状態。
+   * @param {boolean} [departmentChanged=false] - 部門変更なら自由入力グループも照合する。
+   * @returns {void}
+   */
+  function normalizeCurrent(state, departmentChanged = false) {
+    const lists = getLists(state.department);
+    if (!lists.some(list => list.id === state.listType)) {
+      state.listType = lists[0]?.id ?? null;
+    }
+    const active = new Set(activeFilters(state).map(f => f.key));
+    for (const f of config.filters) {
+      if (!active.has(f.key)) {
+        state.filters[f.key] = { mode: 'none', value: '' };
+      }
+    }
+    normalizeGroup(state, departmentChanged);
+  }
+
+  /**
    * config.jsの設定値とIDの一意性を起動時に検証する。
    *
    * @returns {void}
@@ -138,8 +217,9 @@
     // フィルタは保存キーとSharePoint列内部名の両方を一意にする。
     const keys = new Set(),
       columns = new Set();
-    for (const f of config.filters) {
-      if (!/^[a-z][a-z0-9_]*$/i.test(f.key) || keys.has(f.key) || columns.has(f.id)) {
+    for (const f of [groupAttribute(), ...config.filters]) {
+      if (!/^[a-z][a-z0-9_]*$/i.test(f.key) || keys.has(f.key) || columns.has(f.id) ||
+          ['department', 'listType', 'constructor', 'prototype'].includes(f.key)) {
         fail('フィルタキー・内部名を一意にしてください。');
       }
       keys.add(f.key);
@@ -165,6 +245,7 @@
   try {
     validateConfig();
     validateDepartmentGroups();
+    validateListRelations();
   } catch (error) {
     notify('設定エラー：' + error.message);
     document.querySelectorAll('button').forEach(b => b.disabled = true);
@@ -177,7 +258,7 @@
    * @throws {Error} departmentIdが未指定、または未定義の部門IDの場合。
    */
   function validateDepartmentGroups() {
-    const group = config.filters.find(f => f.key === 'group');
+    const group = groupAttribute();
     if (!group) {
       // 担当グループ自体を定義しない構成も許可する。
       return;
@@ -211,8 +292,8 @@
    * @returns {boolean} 選択を解除した場合true。
    */
   function normalizeGroup(state, resetCustom = false) {
-    const group = config.filters.find(f => f.key === 'group');
-    const selected = group && state.filters[group.key];
+    const group = groupAttribute();
+    const selected = state.group;
     if (!selected || selected.mode === 'none' ||
         (selected.mode === 'custom' && !resetCustom)) {
       return false;
@@ -220,7 +301,7 @@
     if (getOptions(group, state.department).some(o => o.id === selected.value)) {
       return false;
     }
-    state.filters[group.key] = { mode: 'none', value: '' };
+    state.group = { mode: 'none', value: '' };
     return true;
   }
 
@@ -232,7 +313,8 @@
   function defaults() {
     return {
       department: config.departments[0].id,
-      listType: config.listTypes[0].id,
+      listType: getLists(config.departments[0].id)[0]?.id ?? null,
+      group: { mode: 'none', value: '' },
       encode: true,
       filters: Object.fromEntries(config.filters.map(f => [f.key, {
         mode: 'none',
@@ -254,8 +336,7 @@
     if (!isObject(value) || typeof value.encode !== 'boolean' || !isObject(value.filters)) {
       fail('選択状態の形式が不正です。');
     }
-    if (!config.departments.some(o => o.id === value.department) || !config.listTypes.some(o => o
-        .id === value.listType)) {
+    if (!config.departments.some(o => o.id === value.department) || (value.listType !== null && !config.listTypes.some(o => o.id === value.listType))) {
       fail('部門またはリスト種類が現在のconfig.jsに存在しません。');
     }
     const result = {
@@ -264,12 +345,13 @@
       encode: value.encode,
       filters: {}
     };
-    for (const f of config.filters) {
+    for (const f of [groupAttribute(), ...config.filters]) {
       // 設定に追加したフィルタは、旧保存データに存在しなければ指定なしで補完。
       // 設定から削除したフィルタは、この再構築の対象外となる。
-      const v = Object.prototype.hasOwnProperty.call(value.filters, f.key)
-        ? value.filters[f.key]
-        : { mode: 'none', value: '' };
+      const v = f.key === 'group'
+        ? (value.group ?? value.filters.group ?? { mode: 'none', value: '' })
+        : (Object.prototype.hasOwnProperty.call(value.filters, f.key)
+          ? value.filters[f.key] : { mode: 'none', value: '' });
       if (!isObject(v) || !['none', 'preset', 'custom'].includes(v.mode)) {
         fail('フィルタの形式が不正です。');
       }
@@ -277,10 +359,10 @@
       if (v.mode === 'preset' && !f.options.some(o => o.id === v.value)) {
         fail('履歴の候補値が現在のconfig.jsに存在しません。');
       }
-      result.filters[f.key] = {
+      setSelection(result, f.key, {
         mode: v.mode,
         value: v.mode === 'none' ? '' : v.value
-      };
+      });
     }
     return result;
   }
@@ -293,13 +375,13 @@
    * @throws {Error} バージョン、件数、URL、選択状態などが不正な場合。
    */
   function validateData(data) {
-    if (!isObject(data) || data.app !== 'sharepoint-url-builder' || data.version !== 1 || !Array
+    if (!isObject(data) || data.app !== 'sharepoint-url-builder' || ![1, 2].includes(data.version) || !Array
       .isArray(data.history) || data.history.length > MAX_HISTORY) {
       fail('対応するエクスポートファイルではありません。');
     }
     return {
       app: data.app,
-      version: 1,
+      version: 2,
       current: validateState(data.current),
       history: data.history.map(h => {
         if (!isObject(h) || !['copy', 'open'].includes(h.action) || typeof h.time !==
@@ -323,14 +405,14 @@
 
   // アプリ全体の可変状態。currentとhistoryをまとめて保存・入出力する。
 
-  // current: department / listType / encode / filters。
+  // current: department / listType / encode / group / filters。
 
   // filtersの各値: { mode: 'none'|'preset'|'custom', value: string }。
 
   // historyの各項目: { action, url, state, time: ISO日時 }。
   let data = {
     app: 'sharepoint-url-builder',
-    version: 1,
+    version: 2,
     current: defaults(),
     history: []
   };
@@ -340,6 +422,7 @@
     const saved = localStorage.getItem(KEY);
     if (saved) {
       data = validateData(JSON.parse(saved));
+      normalizeCurrent(data.current);
     }
   } catch (error) {
     $('storageWarning').hidden = false;
@@ -372,6 +455,9 @@
    * @throws {Error} パスやエンコード対象が不正な場合。
    */
   function buildURL(state) {
+    if (!getLists(state.department).some(list => list.id === state.listType)) {
+      fail('この部門で利用できるリスト種類がありません。');
+    }
     const base = new URL(config.baseUrls[0].id).href.replace(/\/+$/, '');
     // 空の部門IDでは階層自体を省略し、余分なスラッシュを挿入しない。
     const departmentPath = state.department === '' ? '' : '/' + path(state.department);
@@ -388,8 +474,8 @@
      * @returns {string} クエリへ挿入する文字列。
      */
     const enc = value => state.encode ? encodeURIComponent(value) : value;
-    for (const f of config.filters) {
-      const v = state.filters[f.key];
+    for (const f of queryAttributes(state)) {
+      const v = selection(state, f.key);
       if (v.mode === 'none' || v.value === '') {
         continue;
       }
@@ -407,10 +493,10 @@
    */
   function description(state) {
     const parts = [config.departments.find(o => o.id === state.department).name, config.listTypes
-      .find(o => o.id === state.listType).name
+      .find(o => o.id === state.listType)?.name ?? 'リストなし'
     ];
-    for (const f of config.filters) {
-      const v = state.filters[f.key];
+    for (const f of queryAttributes(state)) {
+      const v = selection(state, f.key);
       if (v.mode !== 'none' && v.value !== '') {
         parts.push(f.name + '：' + (v.mode === 'preset' ? f
           .options.find(o => o.id === v.value).name : v.value));
@@ -444,11 +530,8 @@
    * @returns {void}
    */
   function renderColumns() {
-    // 設定変更後の再読込・履歴復元・インポートでも所属外の候補を残さない。
-    if (normalizeGroup(data.current)) {
-      save();
-      notify('選択部門の候補にない担当グループを「指定なし」に戻しました。');
-    }
+    // 復元・インポート・設定変更後も、現在使用できる条件だけを残す。
+    normalizeCurrent(data.current);
     $('columns').replaceChildren();
 
     // 配列の順番が左から右への表示順となる。先頭2列だけが必須。
@@ -459,8 +542,8 @@
     }, {
       key: 'listType',
       name: 'リスト種類',
-      options: config.listTypes
-    }, ...config.filters];
+      options: getLists(data.current.department)
+    }, groupAttribute(), ...activeFilters(data.current)];
     attributes.forEach((f, index) => {
 
       // 属性列の見出しと、選択ボタンを入れる領域を生成する。
@@ -477,7 +560,7 @@
       choices.setAttribute('role', 'group');
       choices.setAttribute('aria-label', f.name);
       const filter = index >= 2;
-      const current = filter ? data.current.filters[f.key] : null;
+      const current = filter ? selection(data.current, f.key) : null;
 
       /**
        * この属性の選択値を更新し、保存して画面へ反映する。
@@ -487,16 +570,11 @@
        */
       const set = (value, mode) => {
         if (filter) {
-          data.current.filters[f.key] = {
-            mode,
-            value
-          };
+          setSelection(data.current, f.key, { mode, value });
         } else {
           const previous = data.current[f.key];
           data.current[f.key] = value;
-          if (f.key === 'department' && previous !== value && normalizeGroup(data.current, true)) {
-            notify('部門を変更したため、担当グループを「指定なし」に戻しました。');
-          }
+          normalizeCurrent(data.current, f.key === 'department' && previous !== value);
         }
         save();
         renderColumns();
@@ -520,6 +598,12 @@
         }, current.mode === 'custom'));
       }
       box.append(choices);
+      if (f.key === 'listType' && f.options.length === 0) {
+        const hint = document.createElement('p');
+        hint.className = 'hint';
+        hint.textContent = 'この部門で利用できるリストはありません。';
+        box.append(hint);
+      }
 
       // 任意属性には自由入力欄を設ける。入力時は自動でcustomへ切り替える。
       if (filter) {
@@ -536,10 +620,7 @@
 
         // 入力中は列を再描画しないことで、フォーカスとカーソル位置を保つ。
         input.addEventListener('input', () => {
-          data.current.filters[f.key] = {
-            mode: 'custom',
-            value: input.value
-          };
+          setSelection(data.current, f.key, { mode: 'custom', value: input.value });
           choices.querySelectorAll('button').forEach((b, i, a) => b.setAttribute(
             'aria-pressed', String(i === a.length - 1)));
           save();
@@ -564,14 +645,15 @@
       $('summary').textContent = description(data.current);
 
       // 未エンコード時にクエリ構造へ影響する文字を検知して注意を表示する。
-      const rawRisk = !data.current.encode && config.filters.some(f => {
-        const v = data.current.filters[f.key];
+      const rawRisk = !data.current.encode && queryAttributes(data.current).some(f => {
+        const v = selection(data.current, f.key);
         return v.mode !== 'none' && v.value && /[&#%+=\s]/.test(f.id + v.value);
       });
       $('urlWarning').hidden = !rawRisk;
       $('urlWarning').textContent = 'エンコードなしでは &・#・+・%・空白などにより条件が正しく伝わらない場合があります。「あり」を推奨します。';
     } catch (error) {
       $('url').value = '';
+      $('summary').textContent = description(data.current);
       $('copy').disabled = true;
       $('open').disabled = true;
       notify('URL生成エラー：' + error.message);
@@ -629,6 +711,7 @@
       );
       actions.append(button('条件を復元', () => {
         data.current = clone(h.state);
+        normalizeCurrent(data.current);
         save();
         renderColumns();
         updateURL();
@@ -906,6 +989,7 @@
 
       // 検証とユーザー確認が完了するまで、現在のデータには触れない。
       data = imported;
+      normalizeCurrent(data.current);
       save();
       renderColumns();
       updateURL();
