@@ -525,14 +525,25 @@
   }
 
   /**
-   * 設定数に応じた属性列を現在の選択状態から再描画し、入力イベントを登録する。
-   *
+   * 設定数に応じた属性列を描画する。操作中の列はDOMを維持する。
+   * @param {string|null} [preserveKey=null] - 再生成しない属性キー。初回・復元時は全列を更新。
    * @returns {void}
    */
-  function renderColumns() {
+  function renderColumns(preserveKey = null) {
     // 復元・インポート・設定変更後も、現在使用できる条件だけを残す。
     normalizeCurrent(data.current);
-    $('columns').replaceChildren();
+    const container = $('columns');
+    const horizontalPosition = container.scrollLeft;
+    const preserved = Array.from(container.children)
+      .find(column => column.getAttribute('data-attribute-key') === preserveKey);
+    const verticalPosition = preserved?.scrollTop ?? 0;
+
+    // 操作した列を取り外さず、他の列だけを削除する。フォーカスも維持される。
+    for (const column of Array.from(container.children)) {
+      if (column !== preserved) {
+        column.remove();
+      }
+    }
 
     // 配列の順番が左から右への表示順となる。先頭2列だけが必須。
     const attributes = [{
@@ -545,10 +556,14 @@
       options: getLists(data.current.department)
     }, groupAttribute(), ...activeFilters(data.current)];
     attributes.forEach((f, index) => {
+      if (preserved && f.key === preserveKey) {
+        return;
+      }
 
       // 属性列の見出しと、選択ボタンを入れる領域を生成する。
       const box = document.createElement('div');
       box.className = 'column';
+      box.setAttribute('data-attribute-key', f.key);
       const title = document.createElement('h3');
       const step = document.createElement('span');
       step.className = 'step';
@@ -576,8 +591,28 @@
           data.current[f.key] = value;
           normalizeCurrent(data.current, f.key === 'department' && previous !== value);
         }
+        // 選択した列ではDOMを作り直さず、選択表示と入力欄だけを書き換える。
+        const selected = filter ? selection(data.current, f.key) : null;
+        const options = getOptions(f, data.current.department);
+        choices.querySelectorAll('button').forEach((candidate, buttonIndex) => {
+          let pressed;
+          if (!filter) {
+            pressed = options[buttonIndex].id === data.current[f.key];
+          } else if (buttonIndex === 0) {
+            pressed = selected.mode === 'none';
+          } else if (buttonIndex === options.length + 1) {
+            pressed = selected.mode === 'custom';
+          } else {
+            pressed = selected.mode === 'preset' && options[buttonIndex - 1].id === selected.value;
+          }
+          candidate.setAttribute('aria-pressed', String(pressed));
+        });
+        if (filter) {
+          $('input-' + f.key).value = selected.mode === 'custom' ? selected.value : '';
+        }
+
         save();
-        renderColumns();
+        renderColumns(f.key);
         updateURL();
       };
 
@@ -593,7 +628,9 @@
       }
       if (filter) {
         choices.append(button('直接入力', () => {
-          set(current.mode === 'custom' ? current.value : '', 'custom');
+          // DOMを維持するため、描画時の値ではなく最新の状態を参照する。
+          const latest = selection(data.current, f.key);
+          set(latest.mode === 'custom' ? latest.value : '', 'custom');
           $('input-' + f.key).focus();
         }, current.mode === 'custom'));
       }
@@ -628,8 +665,15 @@
         });
         box.append(label, input);
       }
-      $('columns').append(box);
+      // 操作した列の手前も、取り外さずに新しい列を差し込める。
+      container.insertBefore(box, container.children[index] || null);
     });
+
+    // 列数・幅の変化によるブラウザの自動補正も考慮し、操作列と横位置を復元する。
+    if (preserved) {
+      preserved.scrollTop = verticalPosition;
+    }
+    container.scrollLeft = horizontalPosition;
   }
 
   /**

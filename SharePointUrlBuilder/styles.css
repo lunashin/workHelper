@@ -117,6 +117,21 @@ section {
   margin: 18px 0;
 }
 
+/* アクセス条件全体は50vh以内。見出し・説明を残し、残りの高さを候補列へ渡す。
+ * 親では縦スクロールせず、各.columnが独立して縦スクロールする。
+ */
+section[aria-labelledby="selectionTitle"] {
+  display: flex;
+  flex-direction: column;
+  max-height: 50vh;
+  overflow: hidden;
+}
+
+section[aria-labelledby="selectionTitle"] > .section-heading,
+section[aria-labelledby="selectionTitle"] > .hint {
+  flex-shrink: 0;
+}
+
 h2 {
   font-size: 14px;
   color: #43877f;
@@ -146,13 +161,23 @@ small {
 .columns {
   display: grid;
   grid-auto-flow: column;
+  grid-template-rows: minmax(0, 1fr);
+  flex: 0 1 auto;
+  min-height: 0;
   grid-auto-columns: minmax(155px, 1fr);
   gap: 12px;
   overflow-x: auto;
+  overflow-y: hidden;
   padding: 10px 3px;
 }
 
+/* 各列にスクロールを閉じ込める。列の高さが内容の最小高さに引きずられないようにする。 */
 .column {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
   padding: 13px;
   background: #f7f9fa;
   border: 1px solid #e2e9eb;
