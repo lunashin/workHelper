@@ -108,6 +108,24 @@
   }
 
   /**
+   * リストの表示ページを取得する。未指定・null・空文字は従来の既定値を使う。
+   * @param {Object} list - listTypesの設定要素。
+   * @returns {string} 未エンコードのページ相対パス。
+   */
+  function getViewPage(list) {
+    const value = list.viewPage;
+    if (value === undefined || value === null || value === '') {
+      return 'AllItems.aspx';
+    }
+    text(value);
+    path(value);
+    if (!/\.aspx$/i.test(value)) {
+      fail('viewPageには.aspxで終わるページ名を指定してください。');
+    }
+    return value;
+  }
+
+  /**
    * リストの所属部門・使用可能フィルタの参照を検証する。
    * @returns {void}
    */
@@ -115,6 +133,7 @@
     const departments = new Set(config.departments.map(d => d.id));
     const filters = new Set(config.filters.map(f => f.key));
     for (const list of config.listTypes) {
+      getViewPage(list);
       for (const [field, valid] of [['departmentIds', departments], ['filterKeys', filters]]) {
         const values = list[field];
         if (!Array.isArray(values) || new Set(values).size !== values.length ||
@@ -448,21 +467,22 @@
   }
 
   /**
-   * 選択状態からAllItems.aspxのURLを組み立てる。通信は行わない。
+   * 選択状態とリストごとの表示ページからURLを組み立てる。通信は行わない。
    *
    * @param {Object} state - 検証済みの選択状態。
    * @returns {string} 指定条件だけを連番で含むURL。
    * @throws {Error} パスやエンコード対象が不正な場合。
    */
   function buildURL(state) {
-    if (!getLists(state.department).some(list => list.id === state.listType)) {
+    const list = getLists(state.department).find(item => item.id === state.listType);
+    if (!list) {
       fail('この部門で利用できるリスト種類がありません。');
     }
     const base = new URL(config.baseUrls[0].id).href.replace(/\/+$/, '');
     // 空の部門IDでは階層自体を省略し、余分なスラッシュを挿入しない。
     const departmentPath = state.department === '' ? '' : '/' + path(state.department);
     const target = base + departmentPath + '/' + path(state.listType) +
-      '/AllItems.aspx';
+      '/' + path(getViewPage(list));
 
     // クエリの組と連番カウンタ。未指定の条件には番号を割り当てない。
     const pairs = [];
@@ -682,6 +702,12 @@
    * @returns {void}
    */
   function updateURL() {
+    // 固定ビュー名の表示を避け、選択リストの実際のページ名を表示する。
+    const list = getLists(data.current.department).find(item => item.id === data.current.listType);
+    const viewLabel = $('viewLabel');
+    if (viewLabel) {
+      viewLabel.textContent = list ? 'ビュー：' + getViewPage(list) : 'ビュー：未選択';
+    }
     try {
       $('url').value = buildURL(data.current);
       $('copy').disabled = false;

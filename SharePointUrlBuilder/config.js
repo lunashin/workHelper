@@ -27,6 +27,7 @@ window.SP_URL_CONFIG = {
     {
       "name": "全体管理",
       "id": "Lists/aaa",
+      "viewPage": "View001.aspx",
       "departmentIds": [ "" ],
       "filterKeys": [ "law" ],
     },
