@@ -413,3 +413,36 @@ footer {
   min-height: 0;
   pointer-events: none;
 }
+
+/* 属性名の下に2つのトグルを横並びで配置する。 */
+.attribute-toggles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.attribute-toggles button {
+  min-width: 0;
+  padding: 7px 4px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  background: #edf0ff;
+  border-color: #a5afe0;
+  color: #354477;
+}
+.attribute-toggles button:hover {
+  background: #dce3ff;
+  border-color: #7485c7;
+}
+.attribute-toggles button[aria-pressed="true"] {
+  background: #475aa3;
+  border-color: #475aa3;
+  color: #fff;
+}
+.attribute-toggles button[aria-pressed="true"]:hover {
+  background: #374881;
+  border-color: #374881;
+}

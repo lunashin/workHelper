@@ -12,6 +12,7 @@
 
   // 保存件数の上限。超過した古い履歴はrecord()で切り捨てる。
   const MAX_HISTORY = 200;
+  const MATCH_LABELS = { Eq: '一致', Contains: '含む', BeginsWith: '始まる' };
 
   // 履歴の削除演出時間（ミリ秒）と、二重削除・途中再描画を防ぐ処理中フラグ。
   const HISTORY_DELETE_DURATION = 500;
@@ -191,6 +192,13 @@
         state.filters[f.key] = { mode: 'none', value: '' };
       }
     }
+    state.matches ??= {};
+    for (const key of Object.keys(state.matches)) {
+      if (key !== 'group' && !active.has(key)) delete state.matches[key];
+    }
+    if (state.sort && state.sort.key !== 'group' && !active.has(state.sort.key)) {
+      state.sort = null;
+    }
     normalizeGroup(state, departmentChanged);
   }
 
@@ -335,6 +343,8 @@
       listType: getLists(config.departments[0].id)[0]?.id ?? null,
       group: { mode: 'none', value: '' },
       encode: true,
+      matches: {},
+      sort: null,
       filters: Object.fromEntries(config.filters.map(f => [f.key, {
         mode: 'none',
         value: ''
@@ -362,7 +372,9 @@
       department: value.department,
       listType: value.listType,
       encode: value.encode,
-      filters: {}
+      filters: {},
+      matches: {},
+      sort: null
     };
     for (const f of [groupAttribute(), ...config.filters]) {
       // 設定に追加したフィルタは、旧保存データに存在しなければ指定なしで補完。
@@ -382,6 +394,25 @@
         mode: v.mode,
         value: v.mode === 'none' ? '' : v.value
       });
+    }
+    if (value.matches !== undefined && !isObject(value.matches)) {
+      fail('一致方法の形式が不正です。');
+    }
+    const attributes = [groupAttribute(), ...config.filters];
+    for (const f of attributes) {
+      const operator = value.matches?.[f.key] ?? 'Eq';
+      if (!Object.prototype.hasOwnProperty.call(MATCH_LABELS, operator)) {
+        fail('一致方法が不正です。');
+      }
+      result.matches[f.key] = operator;
+    }
+    if (value.sort != null) {
+      if (!isObject(value.sort) || !['Desc', 'Asc'].includes(value.sort.direction)) {
+        fail('ソート条件の形式が不正です。');
+      }
+      if (attributes.some(f => f.key === value.sort.key)) {
+        result.sort = { key: value.sort.key, direction: value.sort.direction };
+      }
     }
     return result;
   }
@@ -501,6 +532,12 @@
       }
       n++;
       pairs.push('FilterField' + n + '=' + enc(f.id), 'FilterValue' + n + '=' + enc(v.value));
+      const operator = state.matches?.[f.key] ?? 'Eq';
+      if (operator !== 'Eq') pairs.push('FilterOp' + n + '=' + operator);
+    }
+    const sortAttribute = queryAttributes(state).find(f => f.key === state.sort?.key);
+    if (sortAttribute) {
+      pairs.push('SortField=' + enc(sortAttribute.id), 'SortDir=' + state.sort.direction);
     }
     return target + (pairs.length ? '?' + pairs.join('&') : '');
   }
@@ -519,9 +556,12 @@
       const v = selection(state, f.key);
       if (v.mode !== 'none' && v.value !== '') {
         parts.push(f.name + '：' + (v.mode === 'preset' ? f
-          .options.find(o => o.id === v.value).name : v.value));
+          .options.find(o => o.id === v.value).name : v.value) +
+          '（' + MATCH_LABELS[state.matches?.[f.key] ?? 'Eq'] + '）');
       }
     }
+    const sorted = queryAttributes(state).find(f => f.key === state.sort?.key);
+    if (sorted) parts.push('ソート：' + sorted.name + '・' + (state.sort.direction === 'Desc' ? '降順' : '昇順'));
     return parts.join(' / ');
   }
 
@@ -542,6 +582,49 @@
     }
     b.addEventListener('click', action);
     return b;
+  }
+
+  /** トグルの表示のみを更新し、各列のスクロールとフォーカスを維持する。 */
+  function updateAttributeToggles() {
+    document.querySelectorAll('[data-sort-key]').forEach(b => {
+      const key = b.dataset.sortKey;
+      const direction = data.current.sort?.key === key ? data.current.sort.direction : null;
+      b.textContent = 'ソート：' + (direction === 'Desc' ? '降順 ↓' : direction === 'Asc' ? '昇順 ↑' : '指定なし');
+      b.setAttribute('aria-pressed', String(direction !== null));
+    });
+    document.querySelectorAll('[data-match-key]').forEach(b => {
+      const operator = data.current.matches[b.dataset.matchKey] ?? 'Eq';
+      b.textContent = '一致方法：' + MATCH_LABELS[operator];
+      b.setAttribute('aria-pressed', String(operator !== 'Eq'));
+    });
+  }
+
+  /** 属性の並べ替えと一致方法を循環切替するボタンを作成する。 */
+  function attributeToggles(f) {
+    const controls = document.createElement('div');
+    controls.className = 'attribute-toggles';
+    const sortButton = button('', () => {
+      const previous = data.current.sort;
+      const direction = previous?.key === f.key ? previous.direction : null;
+      const next = { none: 'Desc', Desc: 'Asc', Asc: null }[direction ?? 'none'];
+      data.current.sort = next ? { key: f.key, direction: next } : null;
+      updateAttributeToggles();
+      save();
+      updateURL();
+    });
+    sortButton.dataset.sortKey = f.key;
+    sortButton.title = f.name + 'のソート：降順 → 昇順 → 指定なし';
+    const matchButton = button('', () => {
+      const previous = data.current.matches[f.key] ?? 'Eq';
+      data.current.matches[f.key] = { Eq: 'Contains', Contains: 'BeginsWith', BeginsWith: 'Eq' }[previous];
+      updateAttributeToggles();
+      save();
+      updateURL();
+    });
+    matchButton.dataset.matchKey = f.key;
+    matchButton.title = f.name + 'の一致方法：含む → 始まる → 一致';
+    controls.append(sortButton, matchButton);
+    return controls;
   }
 
   /**
@@ -596,6 +679,7 @@
       choices.setAttribute('aria-label', f.name);
       const filter = index >= 2;
       const current = filter ? selection(data.current, f.key) : null;
+      if (filter) box.append(attributeToggles(f));
 
       /**
        * この属性の選択値を更新し、保存して画面へ反映する。
@@ -694,6 +778,7 @@
       preserved.scrollTop = verticalPosition;
     }
     container.scrollLeft = horizontalPosition;
+    updateAttributeToggles();
   }
 
   /**
