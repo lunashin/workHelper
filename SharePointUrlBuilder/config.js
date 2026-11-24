@@ -27,7 +27,10 @@ window.SP_URL_CONFIG = {
     {
       "name": "全体管理",
       "id": "Lists/aaa",
-      "viewPage": "View001.aspx",
+      "viewPage": {
+        "all": { "name": "すべて", "endpoint": "AllItems.aspx" },
+        "filter1": { "name": "絞り込み1", "endpoint": "View001.aspx" },
+      },
       "departmentIds": [ "" ],
       "filterKeys": [ "law" ],
     },
@@ -57,7 +60,8 @@ window.SP_URL_CONFIG = {
     ]
   },
   "filters": [
-    { "key": "law",
+    {
+      "key": "law",
       "name": "法律番号",
       "id": "RegulationNo",
       "options": [

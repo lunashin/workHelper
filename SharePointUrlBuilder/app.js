@@ -113,17 +113,52 @@
    * @param {Object} list - listTypesの設定要素。
    * @returns {string} 未エンコードのページ相対パス。
    */
-  function getViewPage(list) {
+  function getViews(list) {
     const value = list.viewPage;
-    if (value === undefined || value === null || value === '') {
-      return 'AllItems.aspx';
+    if (value == null || value === '') {
+      return [{ key: '', name: '', endpoint: 'AllItems.aspx' }];
     }
-    text(value);
-    path(value);
-    if (!/\.aspx$/i.test(value)) {
-      fail('viewPageには.aspxで終わるページ名を指定してください。');
+    // 旧設定の単一ページ文字列も読み込む。
+    const views = typeof value === 'string'
+      ? [{ key: '', name: '', endpoint: value }]
+      : Object.entries(value).map(([key, view]) => {
+          if (!isObject(view) || !key) fail('viewPageはビューIDをキーとする辞書にしてください。');
+          text(view.name);
+          if (!view.name) fail('ビュー名を指定してください。');
+          return { key, name: view.name, endpoint: view.endpoint };
+        });
+    if (!views.length || Array.isArray(value)) fail('viewPageに1件以上のビューを定義してください。');
+    for (const view of views) {
+      text(view.endpoint);
+      path(view.endpoint);
+      if (!/\.aspx$/i.test(view.endpoint)) fail('endpointには.aspxで終わるページ名を指定してください。');
     }
-    return value;
+    return views;
+  }
+
+  /** 保存されたビューIDを解決する。旧データ・削除済みIDは先頭ビューへ移行する。 */
+  function getView(list, key) {
+    const views = getViews(list);
+    return views.find(view => view.key === key) ?? views[0];
+  }
+
+  function getViewPage(list, key) {
+    return getView(list, key).endpoint;
+  }
+
+  /** リストとビューの組ごとに選択ボタンを用意する。 */
+  function listOptions(department) {
+    return getLists(department).flatMap(list => getViews(list).map(view => ({
+      id: JSON.stringify([list.id, view.key]),
+      listId: list.id,
+      viewKey: view.key,
+      name: list.name,
+      viewName: view.name
+    })));
+  }
+
+  function selectedListOption(state) {
+    return JSON.stringify([state.listType, state.viewKey]);
   }
 
   /**
@@ -186,6 +221,8 @@
     if (!lists.some(list => list.id === state.listType)) {
       state.listType = lists[0]?.id ?? null;
     }
+    const list = lists.find(item => item.id === state.listType);
+    state.viewKey = list ? getView(list, state.viewKey).key : '';
     const active = new Set(activeFilters(state).map(f => f.key));
     for (const f of config.filters) {
       if (!active.has(f.key)) {
@@ -341,6 +378,7 @@
     return {
       department: config.departments[0].id,
       listType: getLists(config.departments[0].id)[0]?.id ?? null,
+      viewKey: getLists(config.departments[0].id)[0] ? getViews(getLists(config.departments[0].id)[0])[0].key : '',
       group: { mode: 'none', value: '' },
       encode: true,
       matches: {},
@@ -371,6 +409,7 @@
     const result = {
       department: value.department,
       listType: value.listType,
+      viewKey: text(value.viewKey ?? ''),
       encode: value.encode,
       filters: {},
       matches: {},
@@ -513,7 +552,7 @@
     // 空の部門IDでは階層自体を省略し、余分なスラッシュを挿入しない。
     const departmentPath = state.department === '' ? '' : '/' + path(state.department);
     const target = base + departmentPath + '/' + path(state.listType) +
-      '/' + path(getViewPage(list));
+      '/' + path(getViewPage(list, state.viewKey));
 
     // クエリの組と連番カウンタ。未指定の条件には番号を割り当てない。
     const pairs = [];
@@ -552,6 +591,8 @@
     const parts = [config.departments.find(o => o.id === state.department).name, config.listTypes
       .find(o => o.id === state.listType)?.name ?? 'リストなし'
     ];
+    const list = config.listTypes.find(item => item.id === state.listType);
+    if (list && getView(list, state.viewKey).name) parts[1] += '（' + getView(list, state.viewKey).name + '）';
     for (const f of queryAttributes(state)) {
       const v = selection(state, f.key);
       if (v.mode !== 'none' && v.value !== '') {
@@ -656,7 +697,7 @@
     }, {
       key: 'listType',
       name: 'リスト種類',
-      options: getLists(data.current.department)
+      options: listOptions(data.current.department)
     }, groupAttribute(), ...activeFilters(data.current)];
     attributes.forEach((f, index) => {
       if (preserved && f.key === preserveKey) {
@@ -692,7 +733,11 @@
           setSelection(data.current, f.key, { mode, value });
         } else {
           const previous = data.current[f.key];
-          data.current[f.key] = value;
+          if (f.key === 'listType') {
+            [data.current.listType, data.current.viewKey] = JSON.parse(value);
+          } else {
+            data.current[f.key] = value;
+          }
           normalizeCurrent(data.current, f.key === 'department' && previous !== value);
         }
         // 選択した列ではDOMを作り直さず、選択表示と入力欄だけを書き換える。
@@ -701,7 +746,7 @@
         choices.querySelectorAll('button').forEach((candidate, buttonIndex) => {
           let pressed;
           if (!filter) {
-            pressed = options[buttonIndex].id === data.current[f.key];
+            pressed = options[buttonIndex].id === (f.key === 'listType' ? selectedListOption(data.current) : data.current[f.key]);
           } else if (buttonIndex === 0) {
             pressed = selected.mode === 'none';
           } else if (buttonIndex === options.length + 1) {
@@ -726,9 +771,17 @@
           'none'));
       }
       for (const o of getOptions(f, data.current.department)) {
-        choices.append(button(o.name, () => set(o.id, 'preset'),
-          filter ? current.mode === 'preset' && current.value === o.id : data.current[f
-            .key] === o.id));
+        const selected = filter ? current.mode === 'preset' && current.value === o.id
+          : o.id === (f.key === 'listType' ? selectedListOption(data.current) : data.current[f.key]);
+        const choice = button(o.name, () => set(o.id, 'preset'), selected);
+        if (f.key === 'listType' && o.viewName) {
+          const viewName = document.createElement('small');
+          viewName.className = 'list-view-name';
+          viewName.textContent = o.viewName;
+          choice.append(viewName);
+          choice.classList.add('list-view-choice');
+        }
+        choices.append(choice);
       }
       if (filter) {
         choices.append(button('直接入力', () => {
@@ -791,7 +844,7 @@
     const list = getLists(data.current.department).find(item => item.id === data.current.listType);
     const viewLabel = $('viewLabel');
     if (viewLabel) {
-      viewLabel.textContent = list ? 'ビュー：' + getViewPage(list) : 'ビュー：未選択';
+      viewLabel.textContent = list ? 'ビュー：' + getViewPage(list, data.current.viewKey) : 'ビュー：未選択';
     }
     try {
       $('url').value = buildURL(data.current);

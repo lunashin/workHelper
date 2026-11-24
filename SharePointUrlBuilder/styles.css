@@ -446,3 +446,15 @@ footer {
   background: #374881;
   border-color: #374881;
 }
+
+/* リスト名の右側にビュー名を補足表示する。 */
+.list-view-choice {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.list-view-name {
+  font-size: 0.85em;
+  font-weight: normal;
+  overflow-wrap: anywhere;
+}
