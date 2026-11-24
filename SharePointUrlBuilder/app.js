@@ -98,17 +98,6 @@
   }
 
   /**
-   * 独立したgroups設定を画面・URL処理で扱う共通属性形式へ変換する。
-   * @returns {Object} 担当グループ属性。保存先はstate.group。
-   */
-  function groupAttribute() {
-    if (!isObject(config.groups)) {
-      fail('groupsに担当グループの設定を定義してください。');
-    }
-    return { ...config.groups, key: 'group' };
-  }
-
-  /**
    * リストの表示ページを取得する。未指定・null・空文字は従来の既定値を使う。
    * @param {Object} list - listTypesの設定要素。
    * @returns {string} 未エンコードのページ相対パス。
@@ -193,21 +182,17 @@
 
   /** @param {Object} state - 選択状態。 @returns {Array<Object>} URLに使うグループと有効フィルタ。 */
   function queryAttributes(state) {
-    return [groupAttribute(), ...activeFilters(state)];
+    return activeFilters(state);
   }
 
   /** @param {Object} state - 選択状態。 @param {string} key - 属性キー。 @returns {Object} 選択値。 */
   function selection(state, key) {
-    return key === 'group' ? state.group : state.filters[key];
+    return state.filters[key];
   }
 
   /** @param {Object} state - 更新対象。 @param {string} key - 属性キー。 @param {Object} value - 選択値。 @returns {void} */
   function setSelection(state, key, value) {
-    if (key === 'group') {
-      state.group = value;
-    } else {
-      state.filters[key] = value;
-    }
+    state.filters[key] = value;
   }
 
   /**
@@ -216,7 +201,7 @@
    * @param {boolean} [departmentChanged=false] - 部門変更なら自由入力グループも照合する。
    * @returns {void}
    */
-  function normalizeCurrent(state, departmentChanged = false) {
+  function normalizeCurrent(state) {
     const lists = getLists(state.department);
     if (!lists.some(list => list.id === state.listType)) {
       state.listType = lists[0]?.id ?? null;
@@ -225,18 +210,20 @@
     state.viewKey = list ? getView(list, state.viewKey).key : '';
     const active = new Set(activeFilters(state).map(f => f.key));
     for (const f of config.filters) {
-      if (!active.has(f.key)) {
+      const selected = state.filters[f.key];
+      const unavailable = selected?.mode === 'preset' &&
+        !getOptions(f, state.department).some(option => option.id === selected.value);
+      if (!active.has(f.key) || unavailable) {
         state.filters[f.key] = { mode: 'none', value: '' };
       }
     }
     state.matches ??= {};
     for (const key of Object.keys(state.matches)) {
-      if (key !== 'group' && !active.has(key)) delete state.matches[key];
+      if (!active.has(key)) delete state.matches[key];
     }
-    if (state.sort && state.sort.key !== 'group' && !active.has(state.sort.key)) {
+    if (state.sort && !active.has(state.sort.key)) {
       state.sort = null;
     }
-    normalizeGroup(state, departmentChanged);
   }
 
   /**
@@ -281,7 +268,7 @@
     // フィルタは保存キーとSharePoint列内部名の両方を一意にする。
     const keys = new Set(),
       columns = new Set();
-    for (const f of [groupAttribute(), ...config.filters]) {
+    for (const f of config.filters) {
       if (!/^[a-z][a-z0-9_]*$/i.test(f.key) || keys.has(f.key) || columns.has(f.id) ||
           ['department', 'listType', 'constructor', 'prototype'].includes(f.key)) {
         fail('フィルタキー・内部名を一意にしてください。');
@@ -308,7 +295,7 @@
   // 不正な設定では操作を停止し、原因を通知する。
   try {
     validateConfig();
-    validateDepartmentGroups();
+    validateOptionDepartments();
     validateListRelations();
   } catch (error) {
     notify('設定エラー：' + error.message);
@@ -316,57 +303,22 @@
     return;
   }
 
-  /**
-   * グループ側に定義した所属部門IDを検証する。
-   * @returns {void}
-   * @throws {Error} departmentIdが未指定、または未定義の部門IDの場合。
-   */
-  function validateDepartmentGroups() {
-    const group = groupAttribute();
-    if (!group) {
-      // 担当グループ自体を定義しない構成も許可する。
-      return;
-    }
-
-    const departmentIds = new Set(config.departments.map(d => d.id));
-    for (const option of group.options) {
-      if (typeof option.departmentId !== 'string' || !departmentIds.has(option.departmentId)) {
-        fail('担当グループ「' + option.name + '」のdepartmentIdに、所属部門のIDを指定してください。');
+  /** フィルター候補の所属部門を検証する。省略した候補は全部門共通。 */
+  function validateOptionDepartments() {
+    const departments = new Set(config.departments.map(department => department.id));
+    for (const filter of config.filters) {
+      for (const option of filter.options) {
+        if (option.departmentId !== undefined && !departments.has(option.departmentId)) {
+          fail('候補「' + option.name + '」のdepartmentIdを確認してください。');
+        }
       }
     }
   }
 
-  /**
-   * グループ側の所属部門IDで候補を絞り込む。他の属性は全候補を返す。
-   * @param {Object} attribute - 属性の設定。
-   * @param {string} departmentId - 選択中の部門ID。
-   * @returns {Array<Object>} optionsの定義順を維持した候補一覧。
-   */
+  /** 部門専用候補と全部門共通候補を定義順に返す。空文字はTOP部門。 */
   function getOptions(attribute, departmentId) {
-    if (attribute.key !== 'group') {
-      return attribute.options;
-    }
-    return attribute.options.filter(option => option.departmentId === departmentId);
-  }
-
-  /**
-   * 部門に存在しない担当グループを指定なしへ戻す。
-   * @param {Object} state - 更新対象の選択状態。
-   * @param {boolean} [resetCustom=false] - 部門変更時は直接入力値も照合する。
-   * @returns {boolean} 選択を解除した場合true。
-   */
-  function normalizeGroup(state, resetCustom = false) {
-    const group = groupAttribute();
-    const selected = state.group;
-    if (!selected || selected.mode === 'none' ||
-        (selected.mode === 'custom' && !resetCustom)) {
-      return false;
-    }
-    if (getOptions(group, state.department).some(o => o.id === selected.value)) {
-      return false;
-    }
-    state.group = { mode: 'none', value: '' };
-    return true;
+    return attribute.options.filter(option =>
+      option.departmentId === undefined || option.departmentId === departmentId);
   }
 
   /**
@@ -379,7 +331,6 @@
       department: config.departments[0].id,
       listType: getLists(config.departments[0].id)[0]?.id ?? null,
       viewKey: getLists(config.departments[0].id)[0] ? getViews(getLists(config.departments[0].id)[0])[0].key : '',
-      group: { mode: 'none', value: '' },
       encode: true,
       matches: {},
       sort: null,
@@ -415,13 +366,11 @@
       matches: {},
       sort: null
     };
-    for (const f of [groupAttribute(), ...config.filters]) {
+    for (const f of config.filters) {
       // 設定に追加したフィルタは、旧保存データに存在しなければ指定なしで補完。
       // 設定から削除したフィルタは、この再構築の対象外となる。
-      const v = f.key === 'group'
-        ? (value.group ?? value.filters.group ?? { mode: 'none', value: '' })
-        : (Object.prototype.hasOwnProperty.call(value.filters, f.key)
-          ? value.filters[f.key] : { mode: 'none', value: '' });
+      const v = Object.prototype.hasOwnProperty.call(value.filters, f.key)
+        ? value.filters[f.key] : { mode: 'none', value: '' };
       if (!isObject(v) || !['none', 'preset', 'custom'].includes(v.mode)) {
         fail('フィルタの形式が不正です。');
       }
@@ -437,7 +386,7 @@
     if (value.matches !== undefined && !isObject(value.matches)) {
       fail('一致方法の形式が不正です。');
     }
-    const attributes = [groupAttribute(), ...config.filters];
+    const attributes = config.filters;
     for (const f of attributes) {
       const operator = value.matches?.[f.key] ?? 'Eq';
       if (!Object.prototype.hasOwnProperty.call(MATCH_LABELS, operator)) {
@@ -494,7 +443,7 @@
 
   // アプリ全体の可変状態。currentとhistoryをまとめて保存・入出力する。
 
-  // current: department / listType / encode / group / filters。
+  // current: department / listType / viewKey / encode / filters / matches / sort。
 
   // filtersの各値: { mode: 'none'|'preset'|'custom', value: string }。
 
@@ -698,7 +647,7 @@
       key: 'listType',
       name: 'リスト種類',
       options: listOptions(data.current.department)
-    }, groupAttribute(), ...activeFilters(data.current)];
+    }, ...activeFilters(data.current)];
     attributes.forEach((f, index) => {
       if (preserved && f.key === preserveKey) {
         return;
@@ -732,13 +681,12 @@
         if (filter) {
           setSelection(data.current, f.key, { mode, value });
         } else {
-          const previous = data.current[f.key];
           if (f.key === 'listType') {
             [data.current.listType, data.current.viewKey] = JSON.parse(value);
           } else {
             data.current[f.key] = value;
           }
-          normalizeCurrent(data.current, f.key === 'department' && previous !== value);
+          normalizeCurrent(data.current);
         }
         // 選択した列ではDOMを作り直さず、選択表示と入力欄だけを書き換える。
         const selected = filter ? selection(data.current, f.key) : null;

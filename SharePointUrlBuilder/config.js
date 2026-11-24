@@ -47,18 +47,6 @@ window.SP_URL_CONFIG = {
       filterKeys: [ "law", "category", "classification" ],
     },
   ],
-  groups: {
-    name: "担当グループ",
-    id: "ResponsibleGroup",
-    options: [
-      { name: "品質部 Aグループ", id: "GroupA", departmentId: "quality" },
-      { name: "品質部 Bグループ", id: "GroupB", departmentId: "quality" },
-      { name: "設計部 グループ1", id: "GroupC", departmentId: "design" },
-      { name: "設計部 グループ3", id: "GroupD", departmentId: "design" },
-      { name: "生産部 1課", id: "GroupE1", departmentId: "prod" },
-      { name: "生産部 2課", id: "GroupE2", departmentId: "prod" },
-    ]
-  },
   filters: [
     {
       key: "law",
@@ -67,6 +55,7 @@ window.SP_URL_CONFIG = {
       options: [
         { name: "法律001", id: "001" },
         { name: "法律002", id: "002" },
+        { name: "法律003", id: "003", departmentId: "quality" },
       ]
     },
     {
