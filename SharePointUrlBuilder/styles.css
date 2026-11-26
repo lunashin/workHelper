@@ -49,11 +49,14 @@ header p {
   white-space: nowrap;
 }
 
-/* メイン領域：広い画面でも内容の横幅を制限する。 */
+/* メイン領域：横幅の上限を設けず、画面幅を使う。左右の余白は12pxに固定。
+ * 100vwではなく100%とし、縦スクロールバーによる横へのはみ出しを防ぐ。
+ */
 main {
-  max-width: 1800px;
-  margin: auto;
-  padding: 20px 4vw;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 20px 12px;
 }
 
 /* 共通ボタン：通常、ホバー、フォーカス、無効状態。 */
