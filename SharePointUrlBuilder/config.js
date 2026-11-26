@@ -1,8 +1,10 @@
 /* 設定は未エンコードで指定します。既存IDは履歴との対応のため維持してください。
  * departments: 部門一覧。id: '' はTOPサイトとして1件まで指定可能。
  * listTypes: departmentIdsに利用部門ID、filterKeysに使用するfiltersのkeyを指定。
- * groups: 担当グループ専用設定。各候補のdepartmentIdで所属部門を指定。
- * filters: 一般フィルタの定義。groupsはここへ入れません。0件でも可。
+ * listTypes.id: 一意な保存・選択用識別子。URLには使用しません。既存値は維持してください。
+ * listTypes.path: 部門配下のリスト相対パス（必須・未エンコード）。
+ * listTypes.viewPage: ビューIDごとにnameとfilenameを指定。省略時はAllItems.aspx。
+ * filters: フィルタの定義。options.departmentIdで所属部門を指定可能。0件でも可。
  * リストのdepartmentIds/filterKeysは空配列も可。フィルタはfilterKeysの順に表示。
  */
 window.SP_URL_CONFIG = {
@@ -26,23 +28,26 @@ window.SP_URL_CONFIG = {
   listTypes: [
     {
       name: "全体管理",
-      id: "Lists/aaa",
+      id: "aaa",
+      path: "Lists/aaa",
       viewPage: {
-        all: { name: "すべて", endpoint: "AllItems.aspx" },
-        filter1: { name: "絞り込み1", endpoint: "View001.aspx" },
+        all: { name: "すべて", filename: "AllItems.aspx" },
+        filter1: { name: "絞り込み1", filename: "View001.aspx" },
       },
       departmentIds: [ "" ],
       filterKeys: [ "law" ],
     },
     {
       name: "法律管理",
-      id: "Lists/Regulations",
+      id: "Regulations",
+      path: "Lists/Regulations",
       departmentIds: [ "quality", "prod", "prod9" ],
       filterKeys: [ "law", "category" ],
     },
     {
       name: "要件管理",
-      id: "Lists/Requirements",
+      id: "Requirements",
+      path: "Lists/Requirements",
       departmentIds: [ "quality", "design" ],
       filterKeys: [ "law", "category", "classification" ],
     },

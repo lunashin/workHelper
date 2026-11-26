@@ -41,7 +41,7 @@
 - ソート・「含む」・「始まる」の各トグルボタンは各属性の名称と選択ボタンの間に配置する。
 - URLのクエリ文字列はURLエンコード可能とし、画面上のラジオボタンでエンコード有無を切り替え可能とする。
 - URLのフォーマットは以下の通り。
-    - [ベースURL]/[部門ID]/[リスト種類]/AllItems.aspx?FilterField1=[フィルタ条件1の列の内部ID]&FilterValue1=[フィルタ条件1の値]& ...
+    - [ベースURL]/[部門ID]/[listTypes.path]/[viewPageのfilename]?FilterField1=[フィルタ条件1の列の内部ID]&FilterValue1=[フィルタ条件1の値]& ...
 - 指定済み条件だけを1から連番でURLを生成。条件なしでは末尾の ? を付与しない。
 - URLコピーボタンで、生成されたURLをコピーする。
 - URLを開くボタンで生成されたURLを別タブで開く。
@@ -64,16 +64,40 @@
 - ローカルファイルのlocalStorageはブラウザ設定、プロファイル、保存場所の変更、閲覧データ削除などの影響を受けます。同じ場所・同じEdgeプロファイルで利用し、移動前や定期的にエクスポートしてください。保存失敗は画面に表示されます。
 
 ## 設定方法(config.js)
-- config.js の name が表示名、id がURLに使う値です。
+- config.js の name が表示名です。listTypes の id は選択状態・履歴用の一意な識別子で、URLには使用しません。
 
 | 設定 | 内容 | 例 |
 | --- | --- | --- |
 | baseUrls[0].id | ベースURL（1件） | https://intranet/sites/business |
 | departments[].id | 部門の相対パス | quality |
-| listTypes[].id | 部門配下のリスト相対パス | Lists/Regulations |
+| listTypes[].id | 配列内で一意の空でない識別子（保存・選択用） | regulations |
+| listTypes[].path | 部門配下のリスト相対パス（必須） | Lists/Regulations |
+| listTypes[].viewPage[ビューID].filename | ビューのページ相対パス（.aspx） | AllItems.aspx |
 | filters[].id | SharePointの列の内部名 | RegulationNo |
 | filters[].options[].id | 候補選択時のフィルタ値 | 001 |
 | filters[].key | 保存用の一意キー | law |
 
-- パスや候補値は未エンコードで指定してください。パスの / は階層区切りです。パス部分は常にエンコードされ、画面のラジオボタンはクエリの列内部名・値のエンコードだけを切り替えます。Lists を必要としない構成なら listTypes[].id から取り除いてください。
+- パスや候補値は未エンコードで指定してください。パスの / は階層区切りです。パス部分は常にエンコードされ、画面のラジオボタンはクエリの列内部名・値のエンコードだけを切り替えます。Lists を必要としない構成なら listTypes[].path から取り除いてください。
 - 列内部名は表示名と異なる場合があります。実際の列設定に合わせて設定してください。候補のidはフィルタとして送る値であり、参照列のアイテムIDとは限りません。本版は指定された FilterFieldN / FilterValueN の形式専用です。参照列・複数選択など追加パラメータを必要とする列は実環境で確認してください。
+
+### リスト・ビューの設定例
+
+```js
+{
+  name: "法律管理",
+  id: "regulations",
+  path: "Lists/Regulations",
+  viewPage: {
+    all: { name: "すべて", filename: "AllItems.aspx" },
+    pending: { name: "未対応", filename: "Pending.aspx" }
+  },
+  departmentIds: ["quality"],
+  filterKeys: ["law"]
+}
+```
+
+- 上記の未対応ビューでは、URLは `[ベースURL]/quality/Lists/Regulations/Pending.aspx` になります。
+- `viewPage` 全体を省略すると `AllItems.aspx` を使用します。辞書形式では各ビューに `filename` が必要です。
+- 移行時は、既存の `id` を維持したまま、その値を新しい `path` にコピーし、各ビューの `endpoint` を `filename` に変更してください。添付の設定にはこの変更を適用済みです。
+- `path` は必須です。未指定時に `id` をURLのパスとして使うことはありません。同じpathを異なるidのリストで共有することは可能です。
+- 保存済みの選択状態・履歴はidで対応付けます。pathやfilenameだけを変更すると、条件復元後の再生成URLに反映されます。履歴の「URLをコピー」「URLを開く」は記録済みのURLを使用します。

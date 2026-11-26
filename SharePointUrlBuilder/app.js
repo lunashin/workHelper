@@ -100,27 +100,27 @@
   /**
    * リストの表示ページを取得する。未指定・null・空文字は従来の既定値を使う。
    * @param {Object} list - listTypesの設定要素。
-   * @returns {string} 未エンコードのページ相対パス。
+   * @returns {Array<Object>} ビューID・表示名・未エンコードのfilenameの一覧。
    */
   function getViews(list) {
     const value = list.viewPage;
     if (value == null || value === '') {
-      return [{ key: '', name: '', endpoint: 'AllItems.aspx' }];
+      return [{ key: '', name: '', filename: 'AllItems.aspx' }];
     }
     // 旧設定の単一ページ文字列も読み込む。
     const views = typeof value === 'string'
-      ? [{ key: '', name: '', endpoint: value }]
+      ? [{ key: '', name: '', filename: value }]
       : Object.entries(value).map(([key, view]) => {
           if (!isObject(view) || !key) fail('viewPageはビューIDをキーとする辞書にしてください。');
           text(view.name);
           if (!view.name) fail('ビュー名を指定してください。');
-          return { key, name: view.name, endpoint: view.endpoint };
+          return { key, name: view.name, filename: view.filename };
         });
     if (!views.length || Array.isArray(value)) fail('viewPageに1件以上のビューを定義してください。');
     for (const view of views) {
-      text(view.endpoint);
-      path(view.endpoint);
-      if (!/\.aspx$/i.test(view.endpoint)) fail('endpointには.aspxで終わるページ名を指定してください。');
+      text(view.filename);
+      path(view.filename);
+      if (!/\.aspx$/i.test(view.filename)) fail('filenameには.aspxで終わるページ名を指定してください。');
     }
     return views;
   }
@@ -132,7 +132,7 @@
   }
 
   function getViewPage(list, key) {
-    return getView(list, key).endpoint;
+    return getView(list, key).filename;
   }
 
   /** リストとビューの組ごとに選択ボタンを用意する。 */
@@ -251,9 +251,18 @@
       const ids = new Set();
       for (const item of items) {
         text(item.name);
-        // TOPサイトを表す空IDは部門だけに許可する。重複チェックは空IDにも適用。
-        if (!(items === config.departments && item.id === '')) {
-          path(item.id);
+        // 部門IDはパス、リストIDは保存・選択用の識別子として個別に検証する。
+        text(item.id);
+        if (items === config.departments) {
+          // TOPサイトを表す空IDも、後続の重複チェックの対象にする。
+          if (item.id !== '') path(item.id);
+        } else {
+          if (!item.id.trim()) fail('リストのidには空でない識別子を指定してください。');
+          // idへのフォールバックは行わず、URLには必ずpathを使用する。
+          if (typeof item.path !== 'string' || !item.path) {
+            fail('リスト「' + item.name + '」のpathに相対パスを指定してください。');
+          }
+          path(item.path);
         }
         if (ids.has(item.id)) {
           fail('設定IDが重複しています。');
@@ -500,7 +509,8 @@
     const base = new URL(config.baseUrls[0].id).href.replace(/\/+$/, '');
     // 空の部門IDでは階層自体を省略し、余分なスラッシュを挿入しない。
     const departmentPath = state.department === '' ? '' : '/' + path(state.department);
-    const target = base + departmentPath + '/' + path(state.listType) +
+    // listTypeは識別子。URL用の相対パスは選択された設定のpathから取得する。
+    const target = base + departmentPath + '/' + path(list.path) +
       '/' + path(getViewPage(list, state.viewKey));
 
     // クエリの組と連番カウンタ。未指定の条件には番号を割り当てない。
