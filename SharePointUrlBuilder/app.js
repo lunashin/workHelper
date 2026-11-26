@@ -1072,30 +1072,32 @@
    * @returns {void}
    */
   function handleOpenShortcut(event) {
-    // IME確定、長押し、修飾キー付き入力、処理済みイベントは対象外。
+    // IME確定、修飾キー付き入力、処理済みイベントは対象外。
     if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229 ||
-        event.repeat || event.ctrlKey || event.altKey || event.metaKey ||
+        event.ctrlKey || event.altKey || event.metaKey ||
         event.shiftKey || event.defaultPrevented) {
       return;
     }
 
-    // ボタン等では標準のEnter操作を維持する。読み取り専用URL欄では利用可能。
+    // リンク・ファイル選択・複数行編集は標準操作を維持する。ボタンは対象に含める。
     const target = event.target;
     if (target instanceof Element &&
-        (target.closest('button, a, select, input[type="file"], input[type="button"], input[type="submit"], input[type="reset"]') ||
+        (target.closest('a, select, input[type="file"]') ||
          target.isContentEditable || target.closest('textarea:not([readonly])'))) {
       return;
     }
 
-    if ($('open').disabled) {
+    // フォーカス中のボタンのクリックやフォーム送信を抑止する。
+    // 長押し中・URLを開けない状態でも、元のボタン操作は実行させない。
+    event.preventDefault();
+    if (event.repeat || $('open').disabled) {
       return;
     }
 
-    event.preventDefault();
     $('open').click();
   }
 
-  // フィルタ入力欄やページ背景でEnterを押したときにリンクを開く。
+  // ボタン・フィルタ入力欄・ページ背景でEnterを押すと現在の生成URLを開く。
   document.addEventListener('keydown', handleOpenShortcut);
 
   // エンコード設定変更：選択を保存し、URLを即時再生成する。
